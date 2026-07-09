@@ -9,6 +9,8 @@ Inspired by the work of the original author: ben91
 from SimulationClasses import *
 import numpy as np
 
+
+# const_to_char and char_to_cons use the matrices to transform the standard physical variables (desity, momentum, energy) into a decoupled mathematical state called "characteristic variables", and back again
 def cons_to_char(u,f):
     '''
     transform the conservative variables to the characteristic variables
