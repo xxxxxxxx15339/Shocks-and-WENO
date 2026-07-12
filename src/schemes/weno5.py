@@ -9,7 +9,7 @@ from SimulationClasses import *
 import numpy as np 
 
 def WENO5():
-    def scheme():
+    def scheme(u):
         """
         vi+1/2 = v(xi+1/2) + O(Dx^2k-1)
         for k = 3: vi+1/2 = v(xi+1/2) + O(Dx^5) 5th order accuracy
@@ -48,6 +48,47 @@ def WENO5():
         return fl 
     FVM = FiniteVolumeMethod(5, scheme)
     return FVM 
+
+def NNMethod(model):    
+    def scheme(u):
+        min_u = np.amin(u,1)
+        max_u = np.amax(u,1)
+        const_n = min_u==max_u
+        #print('u: ', u)
+        u_tmp = np.zeros_like(u[:,2])
+        u_tmp[:] = u[:,2]
+        for i in range(0,5): 
+            denominator = max_u - min_u
+            safe_denominator = np.where(denominator == 0, 1.0, denominator)
+            u[:,i] = np.where(denominator != 0, (u[:,i] - min_u) / safe_denominator, 0.0)
+
+        fl = model.predict(u)#compute \Delta u
+        fl = fl.flatten()
+        fl = np.multiply(fl,(max_u-min_u))+min_u
+        fl[const_n] = u_tmp[const_n]#if const across stencil, set to that value
+        #print('fl: ', fl)
+        return fl
+    FVM = FiniteVolumeMethod(5, scheme)
+    return FVM
+
+def NNMethod_noScale(model):    
+    def scheme(u):
+        min_u = np.amin(u,1)
+        max_u = np.amax(u,1)
+        const_n = min_u==max_u
+        #print('u: ', u)
+        u_tmp = np.zeros_like(u[:,2])
+        u_tmp[:] = u[:,2]
+        #for i in range(0,5):
+            #u[:,i] = (u[:,i]-min_u)/(max_u-min_u)
+        fl = model.predict(u)#compute \Delta u
+        fl = fl.flatten()
+        #fl = np.multiply(fl,(max_u-min_u))+min_u
+        fl[const_n] = u_tmp[const_n]#if const across stencil, set to that value
+        #print('fl: ', fl)
+        return fl
+    FVM = FiniteVolumeMethod(5, scheme)
+    return FVM
 
 
 
