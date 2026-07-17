@@ -4,7 +4,7 @@ Created on Fri Jun  7 18:42:06 2019
 
 @author: ben91
 """
-from SimulationClasses import *
+from .SimulationClasses import *
 import numpy as np
 '''
 Add time stepping methods to this library. Currently only supports explicit

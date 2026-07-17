@@ -6,7 +6,7 @@ Created on Wed 8 July 03:21:00 2026
 Inspired by the work of the original author: ben91
 """
 
-from SimulationClasses import * 
+from .SimulationClasses import * 
 import numpy as np 
 
 # Two main equations that we will be using: advection - Burger  
@@ -43,6 +43,10 @@ def invBurg():
     def flux(u):
         return 0.5*np.power(u,2)
     return flux
+
+def euler():
+    from .eulerEquations import flux as euler_flux
+    return euler_flux
 
 
 

@@ -1,3 +1,7 @@
+# src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py
+from ..core.SimulationClasses import *
+import numpy as np
+
 def ENO3():
     def scheme(u):
         ep = 1E-6

@@ -4,8 +4,8 @@ Created on Fri Jun  7 18:49:22 2019
 
 @author: ben91
 """
-
-from SimulationClasses import *
+# src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py
+from ..core.SimulationClasses import *
 import numpy as np
 
 def Hook5():
