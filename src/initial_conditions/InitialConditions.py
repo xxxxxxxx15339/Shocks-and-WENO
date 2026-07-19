@@ -119,7 +119,9 @@ def shuOsher():#initial conditions for the sod problem (for Euler equations)
     def fxn(x):
         g = 1.4
         rho0l = 3.857143#initial density
-        rho0r = 1 + 0.2*np.sin(5*x)
+        # Standard Shu--Osher coordinates are [-5, 5].  The solver uses
+        # [0, 10], so translate x by five while retaining the benchmark phase.
+        rho0r = 1 + 0.2*np.sin(5*(x-5))
         p0l = 10.3333#initial pressure
         p0r = 1
         u0l = 2.629369#initial velocity

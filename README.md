@@ -93,6 +93,26 @@ The scalar solver currently supports periodic boundary conditions. CFL validatio
 
 The Euler solver uses transmissive boundaries by default. It constructs the full WENO3, WENO5, or WENO7 stencil at every interface by constant-extrapolating the first and last conservative states into ghost cells. This replaces the former WENO5-specific one-sided closure. Periodic Euler boundaries are also available by passing `boundary='periodic'` to `FiniteVolumeMethodEuler`.
 
+Characteristic Euler reconstruction uses one Roe-averaged eigenbasis at each interface. The same left eigenvector matrix projects both positive and negative Lax–Friedrichs flux stencils, and the matching right matrix transforms their combined reconstruction back to conservative variables.
+
+## Numerical verification
+
+Run the smooth periodic-advection spatial convergence study with:
+
+```bash
+python Script_Convergence.py
+```
+
+The study evaluates the semi-discrete derivative, isolating spatial accuracy from the third-order SSPRK time integrator. The current verified final refinement rates are approximately `3.97`, `5.03`, and `7.10` for WENO3, WENO5, and WENO7, respectively.
+
+Run the physically timed Euler regressions and print all measured quantities as JSON with:
+
+```bash
+python Script_EulerRegression.py
+```
+
+Sod is run to `t=0.2` and compared with the exact Riemann solution. Shu–Osher is run on the standard translated `[-5,5]` problem to `t=1.8` and compared with a 320-cell, CFL `0.35`, WENO7 reference. Each scheme reports L1 density, momentum, and energy errors; minimum density and pressure; density and pressure overshoots; shock and contact locations and location errors; and component-wise conservation-balance errors. The refined Shu–Osher reference is computed during the run so it cannot silently become stale after numerical changes.
+
 ## Canonical evaluation
 
 Evaluate the canonical trained model without plots:
@@ -141,7 +161,7 @@ Run the regression suite with:
 python -m unittest discover -s tests -v
 ```
 
-The tests cover constant-state reconstruction, finite periodic advection, CFL rejection, boundary validation, scaled-data handling, and dataset separation. The Euler end-to-end matrix runs WENO3, WENO5, and WENO7 separately on Sod and Shu–Osher shock problems, plus constant stationary and uniformly moving states. Every run checks finite conservative variables, positive density, and positive pressure; the uniform states must also be preserved to roundoff.
+The tests cover constant-state reconstruction, finite periodic advection, CFL rejection, boundary validation, scaled-data handling, and dataset separation. They verify the Roe matrices are mutual inverses and establish smooth periodic-advection convergence for WENO3, WENO5, and WENO7. The Euler end-to-end matrix runs all three schemes on constant stationary and uniformly moving states as well as the physically timed Sod and Shu–Osher regressions described above.
 
 ## Repository layout
 
