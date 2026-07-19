@@ -16,14 +16,16 @@ def run_euler_benchmark(scheme_builder, initial_condition, cells, length,
                         final_time, cfl=0.35):
     x = np.arange(cells, dtype=float)*length/cells
     initial = initial_condition(x)
-    wave_speed = np.max(np.abs(spds(initial)))
-    steps = int(np.ceil(final_time*wave_speed/(cfl*length/cells)))
     simulation = eulerSimulation(
-        cells, steps+1, length, final_time, SSPRK3(),
+        cells, 2, length, final_time, SSPRK3(),
         getEulerFlux(scheme_builder()), initial_condition, 3,
-        max_wave_speed=wave_speed, max_cfl=cfl,
+        max_cfl=cfl,
+        wave_speed_function=lambda state: np.max(np.abs(spds(state))),
     )
-    return x, simulation.runEuler()[:,-1,:], initial
+    solution = simulation.runEuler()[:,-1,:]
+    if simulation.max_observed_cfl > cfl+1e-12:
+        raise AssertionError('Adaptive Euler CFL exceeded its requested limit.')
+    return x, solution, initial
 
 
 def _pressure_function(pressure, density, initial_pressure):

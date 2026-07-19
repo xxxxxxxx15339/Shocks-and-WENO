@@ -59,7 +59,7 @@ After every attempt, the model is tested on periodic step advection using:
 - `max_tv`: maximum total variation; required to be below `2.016` by default.
 - `shock_width`: maximum number of cells whose error exceeds the tolerance; required to be at most `20` by default.
 
-Training retries indefinitely and saves nothing until both numerical limits pass. A successful model is saved to `MODEL_PATH`, normally:
+Training makes at most 10 attempts by default (`--max-attempts`). It ranks candidates lexicographically by total-variation-limit violation, shock-width-limit violation, and validation loss. Every improvement is checkpointed to `<model-path>.best.h5`; if no candidate passes, the script prints the best candidate and exits unsuccessfully. A successful model is saved to `MODEL_PATH`, normally:
 
 ```text
 trained_weno5.h5
@@ -67,7 +67,7 @@ trained_weno5.h5
 
 This is the one canonical trained-model filename used by training, evaluation, and the basic comparison. The included `SeemsGood3.h5` is retained only as an upstream reference artifact; new training does not overwrite or select it automatically.
 
-Stop an ongoing search with `Ctrl+C`. Training options can be inspected with:
+Training options can be inspected with:
 
 ```bash
 python Script_TrainNetworksFixLeak.py --help
@@ -95,6 +95,8 @@ The Euler solver uses transmissive boundaries by default. It constructs the full
 
 Characteristic Euler reconstruction uses one Roe-averaged eigenbasis at each interface. The same left eigenvector matrix projects both positive and negative Lax–Friedrichs flux stencils, and the matching right matrix transforms their combined reconstruction back to conservative variables.
 
+Euler benchmarks use adaptive time steps computed from the current maximum `|velocity| + sound_speed`, never just the initial state. Every accepted step therefore satisfies the requested CFL, with the final step shortened to land exactly on the requested final time. Density and pressure are validated after every SSPRK stage. Flux splitting uses a local interface spectral radius, the maximum of the adjacent cell wave speeds.
+
 ## Numerical verification
 
 Run the smooth periodic-advection spatial convergence study with:
@@ -103,7 +105,7 @@ Run the smooth periodic-advection spatial convergence study with:
 python Script_Convergence.py
 ```
 
-The study evaluates the semi-discrete derivative, isolating spatial accuracy from the third-order SSPRK time integrator. The current verified final refinement rates are approximately `3.97`, `5.03`, and `7.10` for WENO3, WENO5, and WENO7, respectively.
+The study initializes true cell averages using Gauss–Legendre quadrature and compares the flux divergence with the exact evolution of those averages. It evaluates the semi-discrete derivative, isolating spatial accuracy from the third-order SSPRK time integrator. The current final-grid rates are approximately `3.97`, `5.05`, and `7.12` for nominally third-, fifth-, and seventh-order WENO. The WENO3 number is an asymptotic measurement for this profile, fixed epsilon, and grid sequence; it is not a claim that WENO3 is generally fourth order.
 
 Run the physically timed Euler regressions and print all measured quantities as JSON with:
 
@@ -111,7 +113,9 @@ Run the physically timed Euler regressions and print all measured quantities as 
 python Script_EulerRegression.py
 ```
 
-Sod is run to `t=0.2` and compared with the exact Riemann solution. Shu–Osher is run on the standard translated `[-5,5]` problem to `t=1.8` and compared with a 320-cell, CFL `0.35`, WENO7 reference. Each scheme reports L1 density, momentum, and energy errors; minimum density and pressure; density and pressure overshoots; shock and contact locations and location errors; and component-wise conservation-balance errors. The refined Shu–Osher reference is computed during the run so it cannot silently become stale after numerical changes.
+Sod is run to `t=0.2` and compared with the exact Riemann solution. Shu–Osher is run on the standard translated `[-5,5]` problem to `t=1.8`. By default it uses a 320-cell WENO7 result only as an internal regression baseline, not as independent validation. Supply independently validated or published data with `--shu-reference reference.csv`, using columns `x,density,momentum,energy`, for scientific validation. Each scheme reports L1 density, momentum, and energy errors; minimum density and pressure; density and pressure overshoots; shock and contact locations and location errors; and component-wise conservation-balance errors.
+
+The WENO-NN correction is passed through a bounded hyperbolic tangent before the consistency projection. This limits learned departures while retaining the exact coefficient-sum condition. Final pointwise polynomial coefficients are intentionally not forced nonnegative: classical high-order reconstruction itself requires some negative coefficients. A future TENO-NN classifier should instead put nonnegative normalized probabilities on stencil-admissibility decisions.
 
 ## Canonical evaluation
 
@@ -162,6 +166,8 @@ python -m unittest discover -s tests -v
 ```
 
 The tests cover constant-state reconstruction, finite periodic advection, CFL rejection, boundary validation, scaled-data handling, and dataset separation. They verify the Roe matrices are mutual inverses and establish smooth periodic-advection convergence for WENO3, WENO5, and WENO7. The Euler end-to-end matrix runs all three schemes on constant stationary and uniformly moving states as well as the physically timed Sod and Shu–Osher regressions described above.
+
+Numerical tests depend only on `requirements-numerical.txt`; they do not import TensorFlow. GitHub Actions runs them under modern Python and runs the neural smoke test separately inside a TensorFlow 1.15 container.
 
 ## Repository layout
 

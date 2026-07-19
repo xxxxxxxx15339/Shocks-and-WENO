@@ -29,6 +29,7 @@ from src.core.Equations import adv
 from src.core.FluxSplittingMethods import LaxFriedrichs
 from src.core.SimulationClasses import Simulation
 from src.core.TimeSteppingMethods import SSPRK3
+from src.data.preprocessing import scale_training_data, split_dataset
 from src.initial_conditions.InitialConditions import step1
 from src.networks.LoadDataMethods import loadInputData, loadOutputData
 from src.networks.wholeNetworks import (
@@ -94,6 +95,8 @@ def parse_args():
     parser.add_argument('--max-tv', type=float, default=2.016)
     parser.add_argument('--max-shock-width', type=int, default=20)
     parser.add_argument('--seed', type=int, default=RANDOM_SEED)
+    parser.add_argument('--max-attempts', type=int, default=10)
+    parser.add_argument('--best-model-path', default=None)
     return parser.parse_args()
 
 
@@ -108,38 +111,6 @@ def select_stencil(raw_inputs, order):
         )
     start = (available - order)//2
     return np.transpose(raw_inputs[start:start + order, :])
-
-
-def scale_training_data(inputs, targets):
-    """Normalize each stencil and its interface target to the same local range."""
-    minimum = np.min(inputs, axis=1, keepdims=True)
-    maximum = np.max(inputs, axis=1, keepdims=True)
-    value_range = maximum - minimum
-    nonconstant = value_range[:,0] != 0
-
-    scaled_inputs = np.zeros_like(inputs)
-    scaled_targets = np.zeros_like(targets)
-    scaled_inputs[nonconstant] = (
-        inputs[nonconstant] - minimum[nonconstant]
-    ) / value_range[nonconstant]
-    scaled_targets[nonconstant] = (
-        targets[nonconstant] - minimum[nonconstant]
-    ) / value_range[nonconstant]
-    return scaled_inputs, scaled_targets
-
-
-def split_dataset(inputs, targets, train_fraction=0.70, validation_fraction=0.15):
-    """Use contiguous splits so adjacent correlated stencils do not cross sets."""
-    sample_count = inputs.shape[0]
-    train_end = int(sample_count*train_fraction)
-    validation_end = train_end + int(sample_count*validation_fraction)
-    if train_end == 0 or validation_end <= train_end or validation_end >= sample_count:
-        raise ValueError('Dataset is too small for train/validation/test splitting.')
-    return (
-        inputs[:train_end], targets[:train_end],
-        inputs[train_end:validation_end], targets[train_end:validation_end],
-        inputs[validation_end:], targets[validation_end:],
-    )
 
 
 def make_problem():
@@ -172,6 +143,9 @@ def save_model(model, path):
 
 def main():
     args = parse_args()
+    if args.max_attempts < 1:
+        raise ValueError('--max-attempts must be at least one.')
+    best_model_path = args.best_model_path or args.model_path+'.best.h5'
     tf.logging.set_verbosity(tf.logging.ERROR)
     if WENO_ORDER not in MODEL_BUILDERS:
         raise ValueError('WENO_ORDER must be 3, 5, or 7; got {}.'.format(WENO_ORDER))
@@ -211,9 +185,8 @@ def main():
         ),
         flush=True,
     )
-    attempt = 0
-    while True:
-        attempt += 1
+    best = None
+    for attempt in range(1, args.max_attempts+1):
         started = datetime.datetime.now()
         print('\n=== Attempt {} ==='.format(attempt), flush=True)
 
@@ -233,7 +206,7 @@ def main():
             restore_best_weights=True,
         )
         compact_logger = CompactTrainingLogger()
-        model.fit(
+        history = model.fit(
             x_train,
             y_train,
             epochs=args.epochs,
@@ -271,16 +244,38 @@ def main():
             ),
             flush=True,
         )
+        print('  Duration  | {}'.format(datetime.datetime.now() - started), flush=True)
+
+        validation_loss = min(history.history['val_loss'])
+        # Lexicographic score: numerical acceptance violations first, then
+        # validation loss. This prevents a low ML loss hiding a poor solution.
+        score = (
+            max(0.0, max_tv-args.max_tv),
+            max(0, max_shock_width-args.max_shock_width),
+            validation_loss,
+        )
+        if best is None or score < best['score']:
+            model.save(best_model_path)
+            best = {
+                'attempt': attempt, 'score': score, 'max_tv': max_tv,
+                'shock_width': max_shock_width,
+                'validation_loss': validation_loss,
+            }
+            print('  Best checkpoint: {}'.format(best_model_path), flush=True)
 
         if max_tv < args.max_tv and max_shock_width <= args.max_shock_width:
             save_model(model, args.model_path)
             test_loss = model.evaluate(x_test, y_test, verbose=0)
             print('Untouched test loss: {}'.format(test_loss))
             return
-
-        print('  Duration  | {}'.format(datetime.datetime.now() - started), flush=True)
         be.clear_session()
 
+    print('No candidate met the acceptance limits after {} attempts.'.format(
+        args.max_attempts
+    ))
+    print('Best unsuccessful candidate: {}'.format(best))
+    print('Best checkpoint saved at: {}'.format(best_model_path))
+    raise SystemExit(1)
 
 if __name__ == '__main__':
     main()

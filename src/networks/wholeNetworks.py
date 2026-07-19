@@ -28,10 +28,11 @@ def _correction_model(stencil_size, hidden_size, classical_coefficients, regC):
     x1 = Dense(hidden_size, activation='relu')(coefficients)
     x2 = Dense(hidden_size, activation='relu')(x1)
     x3 = Dense(hidden_size, activation='relu')(x2)
-    correction = Dense(
+    raw_correction = Dense(
         stencil_size,
         activity_regularizer=regularizers.l2(regC),
     )(x3)
+    correction = Lambda(lambda value: 0.5*K.tanh(value))(raw_correction)
     corrected = Subtract()([coefficients, correction])
 
     # Add the same value to every coefficient so their sum remains one.
@@ -169,7 +170,8 @@ def WENO51stOrder(regC):
     x2 = Dense(3,activation='relu')(x1)
     x3 = Dense(3,activation='relu')(x2)
     #TODO: Pass arguments to this function that define the regularization and neural network nodes/layers and l1/l2 optimization
-    dc = Dense(5,activity_regularizer=regularizers.l2(regC))(x3)#end the DNN, the 5 differences are the outputs
+    dc_raw = Dense(5,activity_regularizer=regularizers.l2(regC))(x3)
+    dc = Lambda(lambda value: 0.5*K.tanh(value))(dc_raw)
     c_tilde = Subtract()([Cs,dc])#use the differences to modify the coefficients
     
     dc2 = Dense(pntsuse,trainable=False,weights=[wub1,wub1c])(c_tilde)#compute how each coefficient must be changed for consistency

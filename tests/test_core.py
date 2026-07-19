@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from Script_TrainNetworksFixLeak import scale_training_data, split_dataset
+from src.data.preprocessing import scale_training_data, split_dataset
 from src.analysis import (
     exact_sod_solution, interpolate_reference, periodic_advection_convergence,
     regression_metrics, run_euler_benchmark,
@@ -163,6 +163,29 @@ class EulerValidationTests(unittest.TestCase):
         np.testing.assert_allclose(
             identity, np.broadcast_to(np.eye(3), identity.shape), atol=1e-12
         )
+
+    def test_adaptive_cfl_reaches_exact_final_time(self):
+        from src.core.eulerEquations import spds
+        simulation = eulerSimulation(
+            40, 2, 1.0, 0.02, SSPRK3(), getEulerFlux(WENO5euler()),
+            sod(), 3, max_cfl=0.35,
+            wave_speed_function=lambda state: np.max(np.abs(spds(state))),
+        )
+        simulation.runEuler()
+        self.assertAlmostEqual(simulation.last_times[-1], 0.02, places=14)
+        self.assertLessEqual(simulation.max_observed_cfl, 0.35+1e-12)
+
+    def test_invalid_intermediate_runge_kutta_stage_is_rejected(self):
+        state = self.constant_state()(np.arange(8))
+        with self.assertRaisesRegex(FloatingPointError, 'density'):
+            SSPRK3().stepItEuler(
+                state, lambda value: np.ones_like(value)*100,
+                1.0, 1.0, 3,
+                validator=lambda stage: eulerSimulation(
+                    8, 2, 1, 1, SSPRK3(), lambda value: value,
+                    self.constant_state(), 3,
+                )._validate_state(stage, 0),
+            )
 
 
 class EulerPhysicalRegressionTests(unittest.TestCase):

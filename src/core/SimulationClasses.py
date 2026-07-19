@@ -46,7 +46,8 @@ class Simulation:
     
 class eulerSimulation:
     def __init__(self, nx, nt, L, T, RK, flux, IC, neq,
-                 enforce_positivity=True, max_wave_speed=None, max_cfl=None):
+                 enforce_positivity=True, max_wave_speed=None, max_cfl=None,
+                 wave_speed_function=None):
         self.nx = nx#number of gridpoints
         self.nt = nt#number of timesteps
         self.L = L#domain length
@@ -58,6 +59,9 @@ class eulerSimulation:
         self.enforce_positivity = enforce_positivity
         self.max_wave_speed = max_wave_speed
         self.max_cfl = max_cfl
+        self.wave_speed_function = wave_speed_function
+        self.last_times = None
+        self.max_observed_cfl = None
 
     def _validate_state(self, u, step):
         if not np.isfinite(u).all():
@@ -74,26 +78,46 @@ class eulerSimulation:
         
     def runEuler(self):
         x = np.linspace(0,self.L,self.nx,endpoint = False)
-        t = np.linspace(0,self.T,self.nt,endpoint = True)
         dx = x[1]-x[0]
+        initial = self.IC(x)
+        self._validate_state(initial, 0)
+        if self.max_cfl is not None and self.wave_speed_function is not None:
+            states = [initial]
+            times = [0.0]
+            observed = []
+            while times[-1] < self.T:
+                speed = float(self.wave_speed_function(states[-1]))
+                if not np.isfinite(speed) or speed <= 0:
+                    raise FloatingPointError('Invalid Euler wave speed {}.'.format(speed))
+                dt = min(self.max_cfl*dx/speed, self.T-times[-1])
+                observed.append(speed*dt/dx)
+                next_state = self.RK.stepItEuler(
+                    states[-1], self.flux, dt, dx, self.neq,
+                    validator=lambda stage: self._validate_state(stage, len(states)),
+                )
+                states.append(next_state)
+                times.append(times[-1]+dt)
+            self.last_times = np.asarray(times)
+            self.max_observed_cfl = max(observed) if observed else 0.0
+            return np.stack(states, axis=1)
+
+        t = np.linspace(0,self.T,self.nt,endpoint=True)
         dt = t[1]-t[0]
         if self.max_cfl is not None:
             if self.max_wave_speed is None:
                 raise ValueError('Euler CFL validation requires max_wave_speed.')
             courant = abs(self.max_wave_speed)*dt/dx
             if courant > self.max_cfl + 1e-12:
-                raise ValueError(
-                    'Unstable Euler CFL number {} exceeds limit {}.'.format(
-                        courant, self.max_cfl
-                    )
-                )
+                raise ValueError('Unstable Euler CFL number {} exceeds limit {}.'.format(courant, self.max_cfl))
         u_all = np.zeros((self.nx,self.nt,self.neq))
-        u_all[:,0,:] = self.IC(x)
-        self._validate_state(u_all[:,0,:], 0)
-        for i in range(0, self.nt-1):#TODO: not a big deal but why nt-1?
-            u_all[:,i+1,:] = self.RK.stepItEuler(u_all[:,i,:], self.flux, dt, dx, self.neq)
-            self._validate_state(u_all[:,i+1,:], i+1)
-        return u_all        
+        u_all[:,0,:] = initial
+        for i in range(0, self.nt-1):
+            u_all[:,i+1,:] = self.RK.stepItEuler(
+                u_all[:,i,:], self.flux, dt, dx, self.neq,
+                validator=lambda stage: self._validate_state(stage, i+1),
+            )
+        self.last_times = t
+        return u_all
         
 class TimeSteppingMethod:#assumes explicit method
     def __init__(self, ss, cff):
@@ -111,17 +135,21 @@ class TimeSteppingMethod:#assumes explicit method
             u_all[:,i+1] -= self.ss[i]*flux(u_all[:,i], FVM)*dt/dx#minus because HCL is du/dt = -df(u)/dx
         return u_all[:,-1]
     
-    def stepItEuler(self, u, flux, dt, dx, neq):#FVM is now inside of the flux equation
+    def stepItEuler(self, u, flux, dt, dx, neq, validator=None):#FVM is now inside of the flux equation
         n = np.shape(u)[0]
         u_all = np.zeros((n,self.nss+1,neq))
         u_all[:,0,:] = u
         for i in range(0,self.nss):
+            if validator is not None:
+                validator(u_all[:,i,:])
             for j in range(0,self.nss):
                 u_all[:,i+1,:] += self.cff[i,j]*u_all[:,j,:]
                 #print(u_all[:,i+1,:])
             fl = flux(u_all[:,i,:])
             #print(fl)
             u_all[:,i+1,:] -= self.ss[i]*(fl)*dt/dx#minus because HCL is du/dt = -df(u)/dx
+            if validator is not None:
+                validator(u_all[:,i+1,:])
             #u_all[:,i+1,:] -= self.ss[i]*(fl)*dt/dx#minus because HCL is du/dt = -df(u)/dx
         return u_all[:,-1]
     

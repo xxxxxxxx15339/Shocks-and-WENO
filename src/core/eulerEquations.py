@@ -85,8 +85,12 @@ def getEulerFlux(FVM): #this contains the flux splitting in it so no nead to do 
             flux: the flux at the boundary
         '''
         fu = flux(u) #compute flux from conserved variables cell averages (the temporary one)
-        c = spds(u) #compute wave speeds from cell averages
-        alpha = np.max(np.abs(c)) #global Lax-Friedrichs splitting coefficient
+        c = np.max(np.abs(spds(u)), axis=1)
+        if FVM.boundary == 'periodic':
+            right_speed = np.roll(c, -1)
+        else:
+            right_speed = np.concatenate((c[1:], c[-1:]))
+        alpha = np.maximum(c, right_speed)
         left_basis, right_basis = roe_eigenbasis(u, boundary=FVM.boundary)
         u_part = FVM.partU(u, offset=0)
         fu_part = FVM.partU(fu, offset=0)
@@ -102,8 +106,8 @@ def getEulerFlux(FVM): #this contains the flux splitting in it so no nead to do 
         f_pos = np.zeros_like(fwp)
         f_neg = np.zeros_like(fwm)
         for i in range(0,m):
-            f_pos[:,i,:] = 0.5*(fwp[:,i,:] + alpha*wp[:,i,:]) #positive half of flux
-            f_neg[:,i,:] = 0.5*(fwm[:,i,:] - alpha*wm[:,i,:]) #negative half of flux
+            f_pos[:,i,:] = 0.5*(fwp[:,i,:] + alpha[:,None]*wp[:,i,:])
+            f_neg[:,i,:] = 0.5*(fwm[:,i,:] - alpha[:,None]*wm[:,i,:])
         f_half_pos = FVM.evalF(f_pos) #find the characteristic values at cell faces
         f_half_neg = FVM.evalF(f_neg) #find the characteristic values at cell faces
         flux_char = f_half_pos + f_half_neg
