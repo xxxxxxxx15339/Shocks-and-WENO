@@ -13,8 +13,8 @@ from ..initial_conditions.InitialConditions import *
 from ..networks.wholeNetworks import *
 from ..networks.LoadDataMethods import *   # see note below
 
-from tensorflow.keras import *
-from tensorflow.keras.models import *
+from keras import *
+from keras.models import *
 '''
 import numpy as np
 import matplotlib.pyplot as plt
@@ -353,7 +353,7 @@ def specAnalysis(model, u, RKM,WENONN, NNNN, h, giveModel, makePlots):
         plt.xlabel('Scaled Amplification Factor')
         plt.ylabel('Contribution')
         
-    return g_nn, con_nn, unstb
+    return g_we, g_nn, con_nn, unstb
     #return np.max(g_we), np.max(g_nn)
     #plt.contourf(xp+i*L,tg,abs(er),np.linspace(0,0.025,20))
 def specAnalysisData(model, u, RKM,WENONN, NNNN, CFL, giveModel):
@@ -372,7 +372,11 @@ def specAnalysisData(model, u, RKM,WENONN, NNNN, CFL, giveModel):
 
     for i in range(0,nt):
         print(i)
-        maxWe[i], maxNN[i] = specAnalysis(model, u[:,i], RKM, WENONN, NNNN, CFL, True, False)
+        g_we, g_nn, _, _ = specAnalysis(
+            model, u[:,i], RKM, WENONN, NNNN, CFL, True, False
+        )
+        maxWe[i] = np.max(g_we)
+        maxNN[i] = np.max(g_nn)
         
     plt.figure()
     plt.plot(maxWe)
@@ -391,7 +395,7 @@ def eigenvectorProj(model, u, WENONN, NNNN):
     NNNN.compile(optimizer=adm,loss='mean_squared_error')
     
     
-def evalPerf(x,t,P,u,eex):
+def evalPerf(x,t,P,u,eex,verbose=True):
     '''
     Assume shocks are at middle and end of the x domain at start
     
@@ -413,31 +417,10 @@ def evalPerf(x,t,P,u,eex):
     er = np.abs(eex-u)
     wdth = np.sum(np.greater(er,0.005),axis=1)
     swm = np.max(wdth)
-    print(tvm)
-    print(swm)
+    if verbose:
+        print(tvm)
+        print(swm)
     return tvm, swm
-'''
-def plotDiscWidth(x,t,P,u,u_WE):
-'''
-    #plot width of discontinuity over time for neural network and WENO5
-    
-'''
-    us = np.roll(u, 1, axis = 0)
-
-    
-    u = np.transpose(u)
-    L = x[-1] - x[0] + x[1] - x[0]
-    xg, tg = np.meshgrid(x,t)
-    xp = xg - tg
-    ons = np.ones_like(xp)
-    eex = np.greater(xp%L,ons)
-    er = np.abs(eex-u)
-    wdth = np.sum(np.greater(er,0.005),axis=1)
-    swm = np.max(wdth)
-    print(tvm)
-    print(swm)
-    return tvm, swm
-'''
 def plotDiscWidth(x,t,P,u,u_WE):
     '''
     plot width of discontinuity over time for neural network and WENO5
@@ -1425,4 +1408,3 @@ def variousErrors_New(x,t,u,u_WE):
     ax3.set_ylabel('$w$')
     ax3.set_title('(C)')
     f.tight_layout()
-

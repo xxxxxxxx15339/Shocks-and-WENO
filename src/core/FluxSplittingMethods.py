@@ -16,6 +16,7 @@ def LaxFriedrichs(F,alpha):
     def Lm(u):
         return 0.5*(F(u) - alpha*u)
     FS = FluxSplittingMethod(Lp, Lm)
+    FS.max_wave_speed = abs(alpha)
     return FS
 
 def dontSplit(F):
@@ -25,4 +26,3 @@ def dontSplit(F):
         return 0
     FS = FluxSplittingMethod(Lp, Lm)
     return FS
-

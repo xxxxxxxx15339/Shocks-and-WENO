@@ -12,7 +12,7 @@ from ..core.SimulationClasses import *
 import numpy as np 
 
 def WENO7():
-    def scheme():
+    def scheme(u):
         """
         vi+1/2 = v(xi+1/2) + O(Dx^2k-1)
         for k = 4: vi+1/2 = v(xi+1/2) + O(Dx^7) 7th order accuracy
@@ -74,13 +74,48 @@ def WENO7():
     FVM = FiniteVolumeMethod(7, scheme)
     return FVM 
 
-def WENO5euler():
+def NNMethod(model):
+    def scheme(u):
+        min_u = np.amin(u,1)
+        max_u = np.amax(u,1)
+        const_n = min_u==max_u
+        u_tmp = np.zeros_like(u[:,3])
+        u_tmp[:] = u[:,3]
+        for i in range(0,7):
+            denominator = max_u - min_u
+            safe_denominator = np.where(denominator == 0, 1.0, denominator)
+            u[:,i] = np.where(denominator != 0, (u[:,i] - min_u) / safe_denominator, 0.0)
+
+        fl = model.predict(u)
+        fl = fl.flatten()
+        fl = np.multiply(fl,(max_u-min_u))+min_u
+        fl[const_n] = u_tmp[const_n]
+        return fl
+    FVM = FiniteVolumeMethod(7, scheme)
+    return FVM
+
+def NNMethod_noScale(model):
+    def scheme(u):
+        min_u = np.amin(u,1)
+        max_u = np.amax(u,1)
+        const_n = min_u==max_u
+        u_tmp = np.zeros_like(u[:,3])
+        u_tmp[:] = u[:,3]
+
+        fl = model.predict(u)
+        fl = fl.flatten()
+        fl[const_n] = u_tmp[const_n]
+        return fl
+    FVM = FiniteVolumeMethod(7, scheme)
+    return FVM
+
+def WENO7euler():
     def scheme(f):
         '''
         inputs:
-            f: variables to WENO5 (nx3x5)
+            f: variables to WENO7 (nx3x7)
         outputs:
-            fl: WENO5 flux
+            fl: WENO7 flux
         '''
         ep = 1E-6 
     
@@ -164,6 +199,5 @@ def NNEuler(model):
         return fl
     FVM = FiniteVolumeMethodEuler(7, scheme)
     return FVM
-
 
 

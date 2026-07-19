@@ -11,7 +11,7 @@ import math
 import matplotlib.pyplot as plt
 
 class Simulation:
-    def __init__(self, nx, nt, L, T, RK, FS, FVM, IC):
+    def __init__(self, nx, nt, L, T, RK, FS, FVM, IC, max_cfl=None):
         self.nx = nx#number of gridpoints
         self.nt = nt#number of timesteps
         self.L = L#domain length
@@ -20,12 +20,24 @@ class Simulation:
         self.FS = FS#flux splitting method the sim will use
         self.FVM = FVM#finite volume method the sim will use
         self.IC = IC#initial condition of the simulation
+        self.max_cfl = max_cfl
         
     def run(self):
         x = np.linspace(0,self.L,self.nx,endpoint = False)
         t = np.linspace(0,self.T,self.nt,endpoint = True)
         dx = x[1]-x[0]
         dt = t[1]-t[0]
+        if self.max_cfl is not None:
+            speed = getattr(self.FS, 'max_wave_speed', None)
+            if speed is None:
+                raise ValueError('CFL validation requires a flux-splitting wave speed.')
+            courant = abs(speed)*dt/dx
+            if courant > self.max_cfl + 1e-12:
+                raise ValueError(
+                    'Unstable CFL number {} exceeds limit {}.'.format(
+                        courant, self.max_cfl
+                    )
+                )
         u_all = np.zeros((int(self.nx),int(self.nt)))
         u_all[:,0] = self.IC(x)
         for i in range(0, int(self.nt-1)):
@@ -33,7 +45,8 @@ class Simulation:
         return u_all        
     
 class eulerSimulation:
-    def __init__(self, nx, nt, L, T, RK, flux, IC, neq):
+    def __init__(self, nx, nt, L, T, RK, flux, IC, neq,
+                 enforce_positivity=True, max_wave_speed=None, max_cfl=None):
         self.nx = nx#number of gridpoints
         self.nt = nt#number of timesteps
         self.L = L#domain length
@@ -42,17 +55,45 @@ class eulerSimulation:
         self.flux = flux#finite volume method the sim will use
         self.IC = IC#initial condition of the simulation
         self.neq = neq#number of equations in system of pdes
+        self.enforce_positivity = enforce_positivity
+        self.max_wave_speed = max_wave_speed
+        self.max_cfl = max_cfl
+
+    def _validate_state(self, u, step):
+        if not np.isfinite(u).all():
+            raise FloatingPointError('Euler state became non-finite at step {}.'.format(step))
+        if not self.enforce_positivity:
+            return
+        density = u[:,0]
+        if np.any(density <= 0):
+            raise FloatingPointError('Non-positive Euler density at step {}.'.format(step))
+        velocity = u[:,1]/density
+        pressure = (1.4-1)*(u[:,2]-0.5*density*np.power(velocity,2))
+        if np.any(pressure <= 0):
+            raise FloatingPointError('Non-positive Euler pressure at step {}.'.format(step))
         
     def runEuler(self):
         x = np.linspace(0,self.L,self.nx,endpoint = False)
         t = np.linspace(0,self.T,self.nt,endpoint = True)
         dx = x[1]-x[0]
         dt = t[1]-t[0]
+        if self.max_cfl is not None:
+            if self.max_wave_speed is None:
+                raise ValueError('Euler CFL validation requires max_wave_speed.')
+            courant = abs(self.max_wave_speed)*dt/dx
+            if courant > self.max_cfl + 1e-12:
+                raise ValueError(
+                    'Unstable Euler CFL number {} exceeds limit {}.'.format(
+                        courant, self.max_cfl
+                    )
+                )
         u_all = np.zeros((self.nx,self.nt,self.neq))
         u_all[:,0,:] = self.IC(x)
+        self._validate_state(u_all[:,0,:], 0)
         for i in range(0, self.nt-1):#TODO: not a big deal but why nt-1?
             print(i)
             u_all[:,i+1,:] = self.RK.stepItEuler(u_all[:,i,:], self.flux, dt, dx, self.neq)
+            self._validate_state(u_all[:,i+1,:], i+1)
         return u_all        
         
 class TimeSteppingMethod:#assumes explicit method
@@ -91,6 +132,10 @@ class FluxSplittingMethod:
         self.Lm = Lm#negative flux
         
     def flux(self, u, FVM):
+        if getattr(FVM, 'boundary', 'periodic') != 'periodic':
+            raise NotImplementedError(
+                'Scalar flux splitting currently supports periodic boundaries only.'
+            )
         u_int_og = FVM.evalF(u)#normal velocity
         u_int_fl = np.roll(np.flip(FVM.evalF(np.flip(u))),-1)#mirror velocity
         fp = self.Lp(u_int_og)
@@ -106,9 +151,12 @@ class FluxSplittingMethod:
         return f
     
 class FiniteVolumeMethod:
-    def __init__(self, ss, L):
+    def __init__(self, ss, L, boundary='periodic'):
         self.ss = ss#stencil size
         self.L = L#function that gives interpolated value
+        if boundary != 'periodic':
+            raise NotImplementedError('Only periodic scalar boundaries are implemented.')
+        self.boundary = boundary
         
     def partU(self, u):#partition u into the stencil#TODO: get this going for systems of HCL (nx5x3 for euler eqn). pretend it works for now
         n = len(u)
@@ -125,9 +173,12 @@ class FiniteVolumeMethod:
         return u_int
     
 class FiniteVolumeMethodEuler:
-    def __init__(self, ss, L):
+    def __init__(self, ss, L, boundary='characteristic'):
         self.ss = ss#stencil size
         self.L = L#function that gives interpolated value
+        if boundary != 'characteristic':
+            raise NotImplementedError('Only characteristic Euler boundaries are implemented.')
+        self.boundary = boundary
         
     def partU(self, u):#partition u into the stencil#TODO: get this going for systems of HCL (nx5x3 for euler eqn). pretend it works for now
         m,n = np.shape(u)
@@ -147,4 +198,3 @@ class FiniteVolumeMethodEuler:
         f_int = self.L(f)
         return f_int
         
-

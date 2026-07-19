@@ -1,8 +1,31 @@
 # src/schemes/__init__.py
 from .ENO3 import ENO3
 from .Hook5 import Hook5
-from .weno3 import WENO3
-from .weno5 import WENO5, NNMethod, NNMethod_noScale
-from .weno7 import WENO7
+from .weno3 import (
+    WENO3,
+    WENO3euler,
+    NNMethod as NNMethod3,
+    NNMethod_noScale as NNMethod3_noScale,
+    NNEuler as NNEuler3,
+)
+from .weno5 import (
+    WENO5,
+    WENO5euler,
+    NNMethod,
+    NNMethod_noScale,
+    NNEuler as NNEuler5,
+)
+from .weno7 import (
+    WENO7,
+    WENO7euler,
+    NNMethod as NNMethod7,
+    NNMethod_noScale as NNMethod7_noScale,
+    NNEuler as NNEuler7,
+)
 
-__all__ = ['ENO3', 'Hook5', 'WENO3', 'WENO5', 'WENO7', 'NNMethod', 'NNMethod_noScale']
+__all__ = [
+    'ENO3', 'Hook5',
+    'WENO3', 'WENO3euler', 'NNMethod3', 'NNMethod3_noScale', 'NNEuler3',
+    'WENO5', 'WENO5euler', 'NNMethod', 'NNMethod_noScale', 'NNEuler5',
+    'WENO7', 'WENO7euler', 'NNMethod7', 'NNMethod7_noScale', 'NNEuler7',
+]

@@ -6,18 +6,19 @@ Created on Mon Jun 10 13:24:10 2019
 """
 
 from .wholeNetworks import *
-from tensorflow.keras import *
+from keras import *
 import numpy as np
 import csv
 
-def loadInputData(filename):
+def loadInputData(filename, stencil_size=5):
     with open(filename) as f:
         reader = csv.reader(f)
         #next(reader) # skip header
         avgs = [r for r in reader]
     avgs = np.asarray(avgs)
     avgs = avgs.astype(float)
-    avgs = avgs[0:5,:]
+    if stencil_size is not None:
+        avgs = avgs[0:stencil_size,:]
     return avgs
 
 def loadOutputData(filename):
@@ -28,4 +29,3 @@ def loadOutputData(filename):
     flux = np.asarray(flux)
     flux = flux.astype(float)
     return flux
-
