@@ -6,7 +6,6 @@ Created on Wed 8 July 03:41:25 2026
 Inspired by the work of the original author: ben91
 """
 
-from .SimulationClasses import *
 import numpy as np
 
 
@@ -49,7 +48,7 @@ def cons_to_char(u,f):
     return w,fw
 
 
-def char_to_cons(fc,u):
+def char_to_cons(fc,u,boundary='transmissive'):
     '''
     transform the conservative variables to the characteristic variables
     inputs:
@@ -58,7 +57,13 @@ def char_to_cons(fc,u):
     outputs:
         f_cons: vector of conserved fluxes (n x 3 matrix)
     '''
-    us = 0.5*(u + np.roll(u,-1,axis = 0)) #average to find the state    
+    if boundary == 'periodic':
+        right_state = np.roll(u,-1,axis=0)
+    elif boundary == 'transmissive':
+        right_state = np.concatenate((u[1:,:], u[-1:,:]), axis=0)
+    else:
+        raise ValueError('Unsupported Euler boundary: {}'.format(boundary))
+    us = 0.5*(u + right_state)
     g = 1.4 #ratio of specific heats for air
     rho = us[:,0] #density
     vel = us[:,1]/us[:,0] #velocity
@@ -107,91 +112,6 @@ def spds(ws):
     sps[:,2] = vel - c
     return sps
 
-def leftBC(u):
-    g = 1.4 #ratio of specific heats for air
-    rho = u[:,0] #density
-    vel = u[:,1]/u[:,0] #velocity
-    E = u[:,2] #energy
-    p = (g-1)*(E-0.5*rho*np.power(vel,2)) #pressure
-    c = np.sqrt(g*p/rho) #sound speed
-    n,m = np.shape(u)
-    
-    leig1 = vel[0] - c[0]
-    
-    L1 = leig1*((-3*p[0]+4*p[1]-p[2])/2-rho[0]*c[0]*(-3*vel[0]+4*vel[1]-vel[2])/2)
-    
-    d1 = L1/(2*np.power(c[0],2))
-    d2 = 0.5*L1
-    d3 = -L1/(2*rho[0]*c[0])
-    
-    rhs = np.zeros(3)
-    
-    rhs[0] = -d1
-    rhs[1] = -(vel[0]*d1+rho[0]*d3)
-    rhs[2] = -(0.5*np.power(vel[0],2)*d1+d2/(g-1.0)+rho[0]*vel[0]*d3)
-    return rhs
-
-def rightBC(u):
-    g = 1.4 #ratio of specific heats for air
-    rho = u[:,0] #density
-    vel = u[:,1]/u[:,0] #velocity
-    E = u[:,2] #energy
-    p = (g-1)*(E-0.5*rho*np.power(vel,2)) #pressure
-    c = np.sqrt(g*p/rho) #sound speed
-    n,m = np.shape(u)
-    
-    leig2 = vel[-1]
-    leig3 = vel[-1] + c[-1]
-    
-    L1 = 0
-    L2 = leig2*(np.power(c[-1],2)*(3*rho[-1]-4*rho[-2]+rho[-3])/2-(3*p[-1]-4*p[-2]+p[-3])/2)
-    L3 = leig3*((3*p[-1]-4*p[-2]+p[-3])/2+rho[-1]*c[-1]*(3*vel[-1]-4*vel[-2]+vel[-3])/2)
-    
-    d1 = 1/(np.power(c[-1],2))*(L2+0.5*L3)
-    d2 = 0.5*L3
-    d3 = 1/(2*rho[-1]*c[-1])*L3
-    
-    rhs = np.zeros(3)
-    
-    rhs[0] = -d1
-    rhs[1] = -(vel[-1]*d1+rho[-1]*d3)
-    rhs[2] = -(0.5*np.power(vel[-1],2)*d1+d2/(g-1)+rho[-1]*vel[-1]*d3)
-    return rhs
-
-def WENOtheBC(f,G):
-    '''
-    inputs:
-        f: 3x5 fluxes to be weno'd
-        B: 3 zeros or ones that decide which stencils to ignore
-    outputs:
-        fl: interpolated flux
-    '''
-    ep = 1E-6
-    #compute fluxes on sub stencils
-    f1 = 1/3*f[:,0]-7/6*f[:,1]+11/6*f[:,2]
-    f2 =-1/6*f[:,1]+5/6*f[:,2]+ 1/3*f[:,3]
-    f3 = 1/3*f[:,2]+5/6*f[:,3]- 1/6*f[:,4]
-    #compute smoothness indicators
-    B1 = 13/12*np.power(f[:,0]-2*f[:,1]+f[:,2],2) + 1/4*np.power(f[:,0]-4*f[:,1]+3*f[:,2],2)
-    B2 = 13/12*np.power(f[:,1]-2*f[:,2]+f[:,3],2) + 1/4*np.power(f[:,1]-f[:,3],2)
-    B3 = 13/12*np.power(f[:,2]-2*f[:,3]+f[:,4],2) + 1/4*np.power(3*f[:,2]-4*f[:,3]+f[:,4],2)
-    #assign linear weights
-    g1 = G[0]*1/10
-    g2 = G[1]*3/5
-    g3 = G[2]*3/10
-    #compute the unscaled nonlinear weights
-    wt1 = g1/np.power(ep+B1,2)
-    wt2 = g2/np.power(ep+B2,2)
-    wt3 = g3/np.power(ep+B3,2)
-    wts = wt1 + wt2 + wt3
-    #scale the nonlinear weights
-    w1 = wt1/wts
-    w2 = wt2/wts
-    w3 = wt3/wts
-    #compute the flux
-    fl = f1*w1+f2*w2+f3*w3
-    return fl
-
 def getEulerFlux(FVM): #this contains the flux splitting in it so no nead to do more flux splitting
     def full_flux(u):
         '''
@@ -203,11 +123,13 @@ def getEulerFlux(FVM): #this contains the flux splitting in it so no nead to do 
         fu = flux(u) #compute flux from conserved variables cell averages (the temporary one)
         c = spds(u) #compute wave speeds from cell averages
         alph = np.max(np.abs(c),axis=0) #flux splitting coefficient
-        u_part = FVM.partU(u)
-        fu_part = FVM.partU(fu)
+        u_part = FVM.partU(u, offset=0)
+        fu_part = FVM.partU(fu, offset=0)
+        u_part_neg = np.flip(FVM.partU(u, offset=1), axis=2)
+        fu_part_neg = np.flip(FVM.partU(fu, offset=1), axis=2)
             
         wp,fwp = cons_to_char(u_part,fu_part) #project to characteristic variables
-        wm,fwm = cons_to_char(np.flip(u_part,axis = 2),np.flip(fu_part,axis = 2)) #project to characteristic variables
+        wm,fwm = cons_to_char(u_part_neg,fu_part_neg)
         
         n,m,s = np.shape(wp)
         f_pos = np.zeros_like(fwp)
@@ -215,41 +137,16 @@ def getEulerFlux(FVM): #this contains the flux splitting in it so no nead to do 
         for i in range(0,m):
             f_pos[:,i,:] = 0.5*(fwp[:,i,:] + alph[i]*wp[:,i,:]) #positive half of flux
             f_neg[:,i,:] = 0.5*(fwm[:,i,:] - alph[i]*wm[:,i,:]) #negative half of flux
-        f_neg = np.roll(f_neg,-1,axis = 0)
-        #interior point stuff
         f_half_pos = FVM.evalF(f_pos) #find the characteristic values at cell faces
         f_half_neg = FVM.evalF(f_neg) #find the characteristic values at cell faces
-        #get the fluxes near the boundaries
-        
-        f_half_pos[0,:] = WENOtheBC(f_pos[0,:,:],np.array([0,0,1]))
-        f_half_pos[1,:] = WENOtheBC(f_pos[1,:,:],np.array([0,1,1]))
-        f_half_neg[0,:] = WENOtheBC(f_neg[0,:,:],np.array([1,1,0]))
-        
-        f_half_neg[-2,:] = WENOtheBC(f_neg[-2,:,:],np.array([0,0,1]))
-        f_half_neg[-3,:] = WENOtheBC(f_neg[-3,:,:],np.array([0,1,1]))
-        f_half_pos[-2,:] = WENOtheBC(f_pos[-2,:,:],np.array([1,1,0]))
-        
-        #f_half_pos[-2,:] = WENOtheBC(f_pos[-2,:,:],np.array([0,0,1]))
-        #f_half_pos[-1,:] = WENOtheBC(f_pos[-1,:,:],np.array([0,1,1]))
-        #f_half_neg[-1,:] = WENOtheBC(f_neg[-1,:,:],np.array([1,1,0]))
-        
-        #f_half_neg[1,:] = WENOtheBC(f_neg[1,:,:],np.array([0,1,1]))
-        #f_half_pos[-2,:] = WENOtheBC(f_pos[-2,:,:],np.array([1,1,0]))
-        #f_half_pos[-2,:] = WENOtheBC(f_pos[-2,:,:],np.array([1,1,0]))
-        #f_half_neg[1,:] = WENOtheBC(f_neg[1,:,:],np.array([0,1,1]))
-        #f_half_neg[-3,:] = WENOtheBC(f_neg[-3,:,:],np.array([1,1,0]))
-        #f_half_neg[-2,:] = WENOtheBC(f_neg[-2,:,:],np.array([1,0,0]))
-        
-        #add the fluxes together
         flux_char = f_half_pos + f_half_neg
-        flux_cons = char_to_cons(flux_char,u)
-        
-        net_flux = flux_cons-np.roll(flux_cons,1,axis=0)
-        
-        lbc = leftBC(u)
-        rbc = rightBC(u)
-        net_flux[0,:] = -lbc
-        net_flux[-1:,:] = -rbc
+        flux_cons = char_to_cons(flux_char,u,boundary=FVM.boundary)
+
+        if FVM.boundary == 'periodic':
+            net_flux = flux_cons-np.roll(flux_cons,1,axis=0)
+        else:
+            net_flux = np.empty_like(flux_cons)
+            net_flux[0,:] = flux_cons[0,:]-flux(u[0:1,:])[0,:]
+            net_flux[1:,:] = flux_cons[1:,:]-flux_cons[:-1,:]
         return net_flux
     return full_flux
-

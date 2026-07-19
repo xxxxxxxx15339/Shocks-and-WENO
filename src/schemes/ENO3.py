@@ -1,5 +1,5 @@
 # src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py
-from ..core.SimulationClasses import *
+from ..core.SimulationClasses import FiniteVolumeMethod
 import numpy as np
 
 def ENO3():
@@ -24,4 +24,3 @@ def ENO3():
         return fl
     FVM = FiniteVolumeMethod(3, scheme)
     return FVM
-

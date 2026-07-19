@@ -8,7 +8,7 @@ References
     .. [1] Shen, Y., & Zha, G. (2010). A Robust Seventh-order WENO Scheme and Its Applications.         
 """
 # src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py
-from ..core.SimulationClasses import *
+from ..core.SimulationClasses import FiniteVolumeMethod, FiniteVolumeMethodEuler
 import numpy as np 
 
 def WENO7():
@@ -199,5 +199,4 @@ def NNEuler(model):
         return fl
     FVM = FiniteVolumeMethodEuler(7, scheme)
     return FVM
-
 

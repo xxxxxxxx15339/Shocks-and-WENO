@@ -4,11 +4,12 @@ import numpy as np
 
 from Script_TrainNetworksFixLeak import scale_training_data, split_dataset
 from src.core.Equations import adv
+from src.core.eulerEquations import getEulerFlux
 from src.core.FluxSplittingMethods import LaxFriedrichs
 from src.core.SimulationClasses import Simulation, eulerSimulation
 from src.core.TimeSteppingMethods import SSPRK3
-from src.initial_conditions.InitialConditions import sod, step1
-from src.schemes import WENO5
+from src.initial_conditions.InitialConditions import shuOsher, sod, step1
+from src.schemes import WENO3euler, WENO5, WENO5euler, WENO7euler
 
 
 class WENO5Tests(unittest.TestCase):
@@ -59,6 +60,69 @@ class DataPipelineTests(unittest.TestCase):
 
 
 class EulerValidationTests(unittest.TestCase):
+    EULER_SCHEMES = (WENO3euler, WENO5euler, WENO7euler)
+
+    @staticmethod
+    def constant_state(density=1.0, velocity=0.0, pressure=1.0):
+        def initial_condition(x):
+            energy = pressure/(1.4-1) + 0.5*density*velocity**2
+            return np.tile(
+                [density, density*velocity, energy],
+                (len(x), 1),
+            )
+        return initial_condition
+
+    def run_euler(self, scheme_builder, initial_condition, length=1.0):
+        simulation = eulerSimulation(
+            48,
+            5,
+            length,
+            0.001,
+            SSPRK3(),
+            getEulerFlux(scheme_builder()),
+            initial_condition,
+            3,
+        )
+        solution = simulation.runEuler()
+        self.assertTrue(np.isfinite(solution).all())
+        self.assertTrue(np.all(solution[:,-1,0] > 0))
+        density = solution[:,-1,0]
+        velocity = solution[:,-1,1]/density
+        pressure = (1.4-1)*(solution[:,-1,2]-0.5*density*velocity**2)
+        self.assertTrue(np.all(pressure > 0))
+        return solution
+
+    def test_constant_state_all_weno_orders(self):
+        for scheme_builder in self.EULER_SCHEMES:
+            with self.subTest(scheme=scheme_builder.__name__):
+                solution = self.run_euler(
+                    scheme_builder, self.constant_state()
+                )
+                np.testing.assert_allclose(
+                    solution[:,-1,:], solution[:,0,:], atol=1e-12
+                )
+
+    def test_uniform_moving_state_all_weno_orders(self):
+        for scheme_builder in self.EULER_SCHEMES:
+            with self.subTest(scheme=scheme_builder.__name__):
+                solution = self.run_euler(
+                    scheme_builder,
+                    self.constant_state(velocity=0.75),
+                )
+                np.testing.assert_allclose(
+                    solution[:,-1,:], solution[:,0,:], atol=1e-12
+                )
+
+    def test_sod_all_weno_orders(self):
+        for scheme_builder in self.EULER_SCHEMES:
+            with self.subTest(scheme=scheme_builder.__name__):
+                self.run_euler(scheme_builder, sod())
+
+    def test_shu_osher_all_weno_orders(self):
+        for scheme_builder in self.EULER_SCHEMES:
+            with self.subTest(scheme=scheme_builder.__name__):
+                self.run_euler(scheme_builder, shuOsher(), length=10.0)
+
     def test_nonpositive_density_is_rejected(self):
         simulation = eulerSimulation(
             5, 2, 1.0, 0.01, SSPRK3(), lambda state: state,

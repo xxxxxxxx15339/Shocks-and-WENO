@@ -5,8 +5,6 @@ Created on Mon Jun 10 13:24:10 2019
 @author: ben91
 """
 
-from .wholeNetworks import *
-from keras import *
 import numpy as np
 import csv
 

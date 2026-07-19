@@ -6,7 +6,7 @@ Created on Thur 9 July 13:45:00 2026
 Inspired by the work of the original author: ben91
 """
 # src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py
-from ..core.SimulationClasses import *
+from ..core.SimulationClasses import FiniteVolumeMethod, FiniteVolumeMethodEuler
 import numpy as np 
 
 

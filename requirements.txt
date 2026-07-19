@@ -1,0 +1,7 @@
+# Legacy versions required to reproduce the author's standalone-Keras behavior.
+tensorflow==1.15.0
+Keras==2.2.4
+numpy==1.18.5
+matplotlib==3.3.4
+h5py==2.10.0
+protobuf<4

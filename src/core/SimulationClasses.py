@@ -91,7 +91,6 @@ class eulerSimulation:
         u_all[:,0,:] = self.IC(x)
         self._validate_state(u_all[:,0,:], 0)
         for i in range(0, self.nt-1):#TODO: not a big deal but why nt-1?
-            print(i)
             u_all[:,i+1,:] = self.RK.stepItEuler(u_all[:,i,:], self.flux, dt, dx, self.neq)
             self._validate_state(u_all[:,i+1,:], i+1)
         return u_all        
@@ -173,20 +172,35 @@ class FiniteVolumeMethod:
         return u_int
     
 class FiniteVolumeMethodEuler:
-    def __init__(self, ss, L, boundary='characteristic'):
+    def __init__(self, ss, L, boundary='transmissive'):
         self.ss = ss#stencil size
         self.L = L#function that gives interpolated value
-        if boundary != 'characteristic':
-            raise NotImplementedError('Only characteristic Euler boundaries are implemented.')
+        if boundary not in ('transmissive', 'periodic'):
+            raise NotImplementedError(
+                'Euler boundaries must be transmissive or periodic.'
+            )
         self.boundary = boundary
         
-    def partU(self, u):#partition u into the stencil#TODO: get this going for systems of HCL (nx5x3 for euler eqn). pretend it works for now
-        m,n = np.shape(u)
-        u_all = np.zeros((m,n,self.ss))
-        
-        for i in range(0,self.ss):#assume scheme is upwind or unbiased
-            u_all[:,:,i] = np.roll(u,math.floor(self.ss/2)-i,axis = 0)
-        return u_all
+    def partU(self, u, offset=0):
+        """Build centered Euler stencils, filling ghost cells at boundaries."""
+        cell_count, equation_count = np.shape(u)
+        radius = math.floor(self.ss/2)
+        if self.boundary == 'periodic':
+            indices = (
+                np.arange(cell_count)[:,None]
+                + offset
+                + np.arange(-radius, radius+1)[None,:]
+            ) % cell_count
+        else:
+            indices = np.clip(
+                np.arange(cell_count)[:,None]
+                + offset
+                + np.arange(-radius, radius+1)[None,:],
+                0,
+                cell_count-1,
+            )
+        gathered = u[indices,:]
+        return np.transpose(gathered, (0,2,1))
         
     def evalF(self, f):
         '''

@@ -5,7 +5,7 @@ Created on Fri Jun  7 18:49:22 2019
 @author: ben91
 """
 # src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py
-from ..core.SimulationClasses import *
+from ..core.SimulationClasses import FiniteVolumeMethod
 import numpy as np
 
 def Hook5():
@@ -14,4 +14,3 @@ def Hook5():
         return fl
     FVM = FiniteVolumeMethod(5, scheme)
     return FVM
-

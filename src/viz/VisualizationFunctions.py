@@ -4,17 +4,14 @@ Created on Mon Jun 17 18:05:51 2019
 
 @author: ben91
 """
-from ..core.SimulationClasses import *
-from ..core.TimeSteppingMethods import *
-from ..core.FluxSplittingMethods import *
-from ..core.Equations import *
-from ..schemes import *
-from ..initial_conditions.InitialConditions import *
-from ..networks.wholeNetworks import *
-from ..networks.LoadDataMethods import *   # see note below
+import math
 
-from keras import *
-from keras.models import *
+from ..core.Equations import adv
+from ..core.FluxSplittingMethods import LaxFriedrichs
+from ..core.SimulationClasses import Simulation
+from ..core.TimeSteppingMethods import SSPRK3
+from ..initial_conditions.InitialConditions import sinu
+from ..schemes import ENO3, WENO5
 '''
 import numpy as np
 import matplotlib.pyplot as plt
@@ -234,6 +231,8 @@ def animateSim(x,t,u,pas):
     plt.plot(x,u[:,-1])
     
 def specAnalysis(model, u, RKM,WENONN, NNNN, h, giveModel, makePlots):
+    from keras import optimizers
+    from keras.models import Model
     '''
     perform spectral analysis of a finite volume method when operating on a specific waveform
     
@@ -357,6 +356,8 @@ def specAnalysis(model, u, RKM,WENONN, NNNN, h, giveModel, makePlots):
     #return np.max(g_we), np.max(g_nn)
     #plt.contourf(xp+i*L,tg,abs(er),np.linspace(0,0.025,20))
 def specAnalysisData(model, u, RKM,WENONN, NNNN, CFL, giveModel):
+    from keras import optimizers
+    from keras.models import Model
     nx, nt = np.shape(u)
     if(giveModel):
         pass
@@ -386,6 +387,8 @@ def specAnalysisData(model, u, RKM,WENONN, NNNN, CFL, giveModel):
     return maxWe, maxNN
 
 def eigenvectorProj(model, u, WENONN, NNNN):
+    from keras import optimizers
+    from keras.models import Model
     nx = np.shape(u)
     
     WENONN = Model(inputs=model.input, outputs = model.get_layer(WENONN).output)

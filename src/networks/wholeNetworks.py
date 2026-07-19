@@ -5,9 +5,19 @@ Created on Mon Jun 10 11:26:48 2019
 @author: ben91
 """
 import numpy as np
-from keras import *
 from keras import backend as K
-from keras.layers import *
+from keras import regularizers
+from keras.layers import (
+    Add,
+    Dense,
+    Input,
+    Lambda,
+    Multiply,
+    Subtract,
+    concatenate,
+    dot,
+)
+from keras.models import Model
 
 
 def _correction_model(stencil_size, hidden_size, classical_coefficients, regC):

@@ -7,7 +7,7 @@ Inspired by the work of the original author: ben91
 """
 
 
-from .SimulationClasses import *
+from .SimulationClasses import FluxSplittingMethod
 import numpy as np
 
 def LaxFriedrichs(F,alpha):

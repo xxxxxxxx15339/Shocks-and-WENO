@@ -3,22 +3,23 @@
 
 import argparse
 
-from src.core.SimulationClasses import *
-from src.core.TimeSteppingMethods import *
-from src.core.FluxSplittingMethods import *
-from src.core.Equations import *
-from src.schemes import *
-from src.initial_conditions.InitialConditions import *
-from src.networks.wholeNetworks import *
-from src.networks.LoadDataMethods import *
-from src.viz.VisualizationFunctions import *
-
-from keras import *
-from keras.models import *
+from keras.models import load_model
 import numpy as np
 import matplotlib.pyplot as plt
 
 from src.config import BOUNDARY_CONDITION, MAX_CFL, MODEL_PATH, USE_SCALING
+from src.core.Equations import adv
+from src.core.FluxSplittingMethods import LaxFriedrichs
+from src.core.SimulationClasses import Simulation
+from src.core.TimeSteppingMethods import SSPRK3
+from src.initial_conditions.InitialConditions import step1
+from src.schemes import NNMethod, NNMethod_noScale, WENO5
+from src.viz.VisualizationFunctions import (
+    discTrackStep,
+    intError,
+    plotDiscWidth,
+    totalVariation,
+)
 
 
 def parse_args():

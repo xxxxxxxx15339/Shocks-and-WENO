@@ -4,7 +4,7 @@ Created on Fri Jun  7 18:42:06 2019
 
 @author: ben91
 """
-from .SimulationClasses import *
+from .SimulationClasses import TimeSteppingMethod
 import numpy as np
 '''
 Add time stepping methods to this library. Currently only supports explicit
@@ -30,5 +30,4 @@ def SSPRK3():
     ss = np.array([1, 1/4, 2/3])
     cff = np.array([[1,0,0],[3/4,1/4,0],[1/3,0,2/3]])    
     return TimeSteppingMethod(ss, cff)
-
 

@@ -70,7 +70,7 @@ def gaussian2(k,s,A):
         return A*np.exp(-k*np.power(x-s,2))
     return fxn
 
-def idkThatoneThinglol(k,s):
+def gaussian_derivative(k,s):
     def fxn(x):
         return 2*k*(x-s)*np.exp(-k*np.power(x-s,2))
     return fxn
@@ -134,4 +134,3 @@ def shuOsher():#initial conditions for the sod problem (for Euler equations)
         u[:,2] = E0l*np.greater(B,x)+E0r*np.greater_equal(x,B)
         return u
     return fxn
-
