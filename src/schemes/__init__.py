@@ -22,10 +22,32 @@ from .weno7 import (
     NNMethod_noScale as NNMethod7_noScale,
     NNEuler as NNEuler7,
 )
+from .teno3 import (
+    TENO3,
+    TENO3euler,
+    NNMethod as NN_TENO3,
+    NNEuler as NN_TENO3_Euler,
+)
+from .teno5 import (
+    TENO5,
+    TENO5euler,
+    NNMethod as NN_TENO5,
+    NNEuler as NN_TENO5_Euler,
+)
+from .teno7 import (
+    TENO7,
+    TENO7euler,
+    NNMethod as NN_TENO7,
+    NNEuler as NN_TENO7_Euler,
+)
 
 __all__ = [
     'ENO3', 'Hook5',
     'WENO3', 'WENO3euler', 'NNMethod3', 'NNMethod3_noScale', 'NNEuler3',
     'WENO5', 'WENO5euler', 'NNMethod', 'NNMethod_noScale', 'NNEuler5',
     'WENO7', 'WENO7euler', 'NNMethod7', 'NNMethod7_noScale', 'NNEuler7',
+    'TENO3', 'TENO3euler', 'TENO5', 'TENO5euler', 'TENO7', 'TENO7euler',
+    'NN_TENO3', 'NN_TENO3_Euler',
+    'NN_TENO5', 'NN_TENO5_Euler',
+    'NN_TENO7', 'NN_TENO7_Euler',
 ]

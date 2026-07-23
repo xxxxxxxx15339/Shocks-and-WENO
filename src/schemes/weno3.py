@@ -2,7 +2,7 @@
 """
 Created on Satu 11 July 16:37:00 2026 
 
-@author: yasser ba 
+@author: yasser 
 Inspired by the work of the original author: ben91
 """
 # src/schemes/ENO3.py, Hook5.py, weno3.py, weno5.py, weno7.py

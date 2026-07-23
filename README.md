@@ -157,6 +157,26 @@ Both files are headerless, comma-separated, decimal floating-point matrices:
 
 The input values currently range from `0` to `1`; target values range approximately from `-0.5` to `1.5`. Input and target files must contain the same number of samples. With `USE_SCALING=True`, each input column and its target are transformed using that stencil’s local minimum and range before splitting.
 
+## TENO and NN-TENO status
+
+The repository includes deterministic TENO3, TENO5, and TENO7 scalar and
+Euler reconstructions.  It also includes NENO-style classifier architectures
+and scalar/Euler NN-TENO wrappers for all three orders.  If every candidate is
+rejected, the wrappers use the center/upwind value as a first-order fallback.
+
+NN-TENO input stencils are normalized independently as
+
+```text
+X / max(max(abs(X)), 1)
+```
+
+Each sigmoid output classifies one candidate stencil: `0` means smooth/keep
+and `1` means troubled/discard.  The network predicts candidate selection,
+not the final flux, candidate polynomial, or reconstruction weights.
+
+NN-TENO training datasets, trained classifier models, classifier training
+scripts, and extensive trained-model PDE benchmarks are not implemented yet.
+
 ## Tests
 
 Run the regression suite with:

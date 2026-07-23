@@ -32,7 +32,7 @@ from src.core.TimeSteppingMethods import SSPRK3
 from src.data.preprocessing import scale_training_data, split_dataset
 from src.initial_conditions.InitialConditions import step1
 from src.networks.LoadDataMethods import loadInputData, loadOutputData
-from src.networks.wholeNetworks import (
+from src.networks.WenoNetworks import (
     WENO31stOrder,
     WENO51stOrder,
     WENO71stOrder,
@@ -92,8 +92,8 @@ def parse_args():
     parser.add_argument('--learning-rate', type=float, default=0.001)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=150)
-    parser.add_argument('--max-tv', type=float, default=2.016)
-    parser.add_argument('--max-shock-width', type=int, default=20)
+    parser.add_argument('--max-tv', type=float, default=2.05)
+    parser.add_argument('--max-shock-width', type=int, default=30)
     parser.add_argument('--seed', type=int, default=RANDOM_SEED)
     parser.add_argument('--max-attempts', type=int, default=10)
     parser.add_argument('--best-model-path', default=None)

@@ -73,6 +73,8 @@ def main():
 
     plt.plot(x,uv_WENO5[:,-1])
 
+    plt.show()
+
     print("Simulation finished! Here is the final array:")
     print(uv)
 
