@@ -1,9 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Generate characteristic Euler WENO5-NN training data.
+"""Generate characteristic Euler training data for WENO5-NN.
 
-The labels are WENO7 reconstructions of Lax--Friedrichs split characteristic
-fluxes.  The input is the matching central five-point stencil, which is the
-input expected by ``NNEuler5``.
+The network input is a five-point Lax--Friedrichs split characteristic-flux
+stencil. The target is a WENO-Z5 reconstruction calculated from exactly the
+same five-point stencil.
+
+WENO7 is used only to generate stable Euler trajectories. It is not used as
+the reconstruction target.
+
+The generated files are:
+
+    data/eulerAvgs.csv
+        Shape: (5, sample_count)
+
+    data/eulerFlux.csv
+        Shape: (sample_count, 1)
+
+    data/eulerGroups.csv
+        Shape: (sample_count, 1)
+
+The group file contains trajectory identifiers so that training,
+validation and testing can be separated by trajectory instead of by
+correlated individual stencil rows.
 """
 
 import argparse
@@ -11,142 +29,1272 @@ import os
 
 import numpy as np
 
-from src.core.SimulationClasses import eulerSimulation, FiniteVolumeMethodEuler
+from src.core.SimulationClasses import eulerSimulation
 from src.core.TimeSteppingMethods import SSPRK3
 from src.core.eulerEquations import (
-    flux, getEulerFlux, project_to_characteristic, roe_eigenbasis, spds,
+    GAMMA,
+    flux,
+    getEulerFlux,
+    project_to_characteristic,
+    roe_eigenbasis,
+    spds,
 )
-from src.initial_conditions.InitialConditions import shuOsher, sod
 from src.schemes import WENO7euler
 
 
+CATEGORY_PROPORTIONS = {
+    'smooth': 0.40,
+    'shock': 0.30,
+    'shock_oscillation': 0.20,
+    'constant': 0.10,
+}
+
+
+# ---------------------------------------------------------------------------
+# Arguments
+# ---------------------------------------------------------------------------
+
 def parse_args():
-    parser = argparse.ArgumentParser(description='Generate Euler NN CSV data.')
-    parser.add_argument('--output-inputs', default='data/eulerAvgs.csv')
-    parser.add_argument('--output-targets', default='data/eulerFlux.csv')
-    parser.add_argument('--output-groups', default='data/eulerGroups.csv')
-    parser.add_argument('--samples', type=int, default=100000,
-                        help='Total number of generated samples.')
-    parser.add_argument('--cells', type=int, default=256)
-    parser.add_argument('--cfl', type=float, default=0.25)
-    parser.add_argument('--seed', type=int, default=42)
+    parser = argparse.ArgumentParser(
+        description=(
+            'Generate five-point characteristic Euler data with '
+            'WENO-Z5 reconstruction targets.'
+        )
+    )
+
+    parser.add_argument(
+        '--output-inputs',
+        default='data/eulerAvgs.csv',
+    )
+
+    parser.add_argument(
+        '--output-targets',
+        default='data/eulerFlux.csv',
+    )
+
+    parser.add_argument(
+        '--output-groups',
+        default='data/eulerGroups.csv',
+    )
+
+    parser.add_argument(
+        '--samples',
+        type=int,
+        default=100000,
+        help='Total requested number of generated samples.',
+    )
+
+    parser.add_argument(
+        '--cells',
+        type=int,
+        default=256,
+        help='Cells used for generated Euler trajectories.',
+    )
+
+    parser.add_argument(
+        '--cfl',
+        type=float,
+        default=0.25,
+    )
+
+    parser.add_argument(
+        '--snapshots',
+        type=int,
+        default=24,
+        help='Maximum number of snapshots retained from each trajectory.',
+    )
+
+    parser.add_argument(
+        '--shock-variants',
+        type=int,
+        default=6,
+        help='Number of Sod-like shock-tube trajectories.',
+    )
+
+    parser.add_argument(
+        '--shu-variants',
+        type=int,
+        default=6,
+        help='Number of Shu--Osher-like trajectories.',
+    )
+
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+    )
+
     return parser.parse_args()
 
 
+def validate_args(args):
+    if args.samples < 1:
+        raise ValueError('--samples must be positive.')
+
+    if args.cells < 8:
+        raise ValueError('--cells must be at least 8.')
+
+    if args.cfl <= 0.0:
+        raise ValueError('--cfl must be positive.')
+
+    if args.snapshots < 2:
+        raise ValueError('--snapshots must be at least 2.')
+
+    if args.shock_variants < 1:
+        raise ValueError('--shock-variants must be positive.')
+
+    if args.shu_variants < 1:
+        raise ValueError('--shu-variants must be positive.')
+
+
+# ---------------------------------------------------------------------------
+# Euler initial conditions
+# ---------------------------------------------------------------------------
+
+def conservative_state(density, velocity, pressure):
+    """Convert primitive variables into Euler conservative variables."""
+
+    density = np.asarray(density, dtype=float)
+    velocity = np.asarray(velocity, dtype=float)
+    pressure = np.asarray(pressure, dtype=float)
+
+    energy = (
+        pressure / (GAMMA - 1.0)
+        + 0.5 * density * velocity**2
+    )
+
+    return np.column_stack((
+        density,
+        density * velocity,
+        energy,
+    ))
+
+
 def smooth_wave(x, frequency, phase, amplitude):
-    rho = 1.0 + amplitude*np.sin(frequency*(x-5.0)+phase)
-    velocity = 0.15*np.cos(frequency*(x-5.0)+phase)
-    pressure = 1.0 + 0.1*amplitude*np.sin(frequency*(x-5.0)+phase)
-    energy = pressure/0.4 + 0.5*rho*velocity**2
-    return np.column_stack((rho, rho*velocity, energy))
+    """Construct a smooth, physically valid Euler state."""
+
+    argument = frequency * (x - 5.0) + phase
+
+    density = 1.0 + amplitude * np.sin(argument)
+    velocity = 0.15 * np.cos(argument)
+    pressure = 1.0 + 0.10 * amplitude * np.sin(argument)
+
+    return conservative_state(
+        density,
+        velocity,
+        pressure,
+    )
 
 
-def trajectories(args, rng):
-    x = np.arange(args.cells, dtype=float)*10.0/args.cells
-    cases = []
-    for frequency in (0.8, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0,
-                      9.0, 11.0):
-        for phase in (0.0, 0.7, 1.3, 2.1):
-            cases.append(('smooth', smooth_wave(
-                x, frequency, phase, rng.uniform(0.05, 0.25)
-            )))
-    for name, initial_condition in (('shock', sod()), ('shock_oscillation', shuOsher())):
-        sim = eulerSimulation(
-            args.cells, 2, 10.0, 1.8, SSPRK3(),
-            getEulerFlux(__import__('src.schemes', fromlist=['WENO7euler']).WENO7euler()),
-            initial_condition, 3, max_cfl=args.cfl,
-            wave_speed_function=lambda state: np.max(np.abs(spds(state))),
+def make_riemann_initial_condition(
+    discontinuity,
+    left_density=1.0,
+    left_velocity=0.0,
+    left_pressure=1.0,
+    right_density=0.125,
+    right_velocity=0.0,
+    right_pressure=0.1,
+):
+    """Create a Sod-like Riemann initial condition."""
+
+    def initial_condition(x):
+        left = x < discontinuity
+
+        density = np.where(
+            left,
+            left_density,
+            right_density,
         )
-        history = np.transpose(sim.runEuler(), (1, 0, 2))
-        for state in history[::max(1, len(history)//24)]:
-            cases.append((name, state))
-    for _ in range(12):
-        rho = rng.uniform(0.5, 3.0)
+
+        velocity = np.where(
+            left,
+            left_velocity,
+            right_velocity,
+        )
+
+        pressure = np.where(
+            left,
+            left_pressure,
+            right_pressure,
+        )
+
+        return conservative_state(
+            density,
+            velocity,
+            pressure,
+        )
+
+    return initial_condition
+
+
+def make_shu_osher_initial_condition(
+    shock_position=1.0,
+    amplitude=0.2,
+    wave_number=5.0,
+    phase=0.0,
+):
+    """Create a translated Shu--Osher-like initial condition on [0, 10]."""
+
+    def initial_condition(x):
+        left = x < shock_position
+
+        right_density = (
+            1.0
+            + amplitude * np.sin(
+                wave_number * (x - 5.0) + phase
+            )
+        )
+
+        density = np.where(
+            left,
+            3.857143,
+            right_density,
+        )
+
+        velocity = np.where(
+            left,
+            2.629369,
+            0.0,
+        )
+
+        pressure = np.where(
+            left,
+            10.3333,
+            1.0,
+        )
+
+        return conservative_state(
+            density,
+            velocity,
+            pressure,
+        )
+
+    return initial_condition
+
+
+# ---------------------------------------------------------------------------
+# Trajectory generation
+# ---------------------------------------------------------------------------
+
+def run_trajectory(
+    initial_condition,
+    cells,
+    length,
+    final_time,
+    cfl,
+    snapshot_count,
+):
+    """Run a WENO7 Euler trajectory and retain evenly spaced snapshots."""
+
+    simulation = eulerSimulation(
+        cells,
+        2,
+        length,
+        final_time,
+        SSPRK3(),
+        getEulerFlux(WENO7euler()),
+        initial_condition,
+        3,
+        max_cfl=cfl,
+        wave_speed_function=lambda state: np.max(
+            np.abs(spds(state))
+        ),
+    )
+
+    # runEuler returns (cells, times, variables).
+    history = np.transpose(
+        simulation.runEuler(),
+        (1, 0, 2),
+    )
+
+    retained_count = min(
+        snapshot_count,
+        len(history),
+    )
+
+    snapshot_indices = np.unique(
+        np.linspace(
+            0,
+            len(history) - 1,
+            retained_count,
+        ).astype(int)
+    )
+
+    return [
+        history[index]
+        for index in snapshot_indices
+    ]
+
+
+def generated_states(args, rng):
+    """Yield category, trajectory ID and Euler state."""
+
+    # ------------------------------------------------------------------
+    # Smooth states
+    # ------------------------------------------------------------------
+
+    x_smooth = (
+        np.arange(args.cells, dtype=float)
+        * 10.0
+        / args.cells
+    )
+
+    frequencies = (
+        0.8,
+        1.0,
+        1.5,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        7.0,
+        9.0,
+        11.0,
+    )
+
+    phases = (
+        0.0,
+        0.7,
+        1.3,
+        2.1,
+    )
+
+    smooth_index = 0
+
+    for frequency in frequencies:
+        for phase in phases:
+            amplitude = rng.uniform(0.05, 0.25)
+
+            group_id = 'smooth_{:03d}'.format(
+                smooth_index
+            )
+
+            state = smooth_wave(
+                x_smooth,
+                frequency,
+                phase,
+                amplitude,
+            )
+
+            yield 'smooth', group_id, state
+
+            smooth_index += 1
+
+    # ------------------------------------------------------------------
+    # Sod-like shock tubes
+    #
+    # Sod must be evolved on [0, 1] until approximately t = 0.2.
+    # The previous code incorrectly evolved Sod on [0, 10] until t = 1.8.
+    # ------------------------------------------------------------------
+
+    for variant in range(args.shock_variants):
+        if args.shock_variants == 1:
+            fraction = 0.5
+        else:
+            fraction = (
+                variant
+                / float(args.shock_variants - 1)
+            )
+
+        discontinuity = 0.35 + 0.30 * fraction
+        right_density = 0.10 + 0.10 * fraction
+        right_pressure = 0.08 + 0.08 * fraction
+
+        initial_condition = make_riemann_initial_condition(
+            discontinuity=discontinuity,
+            right_density=right_density,
+            right_pressure=right_pressure,
+        )
+
+        group_id = 'shock_{:03d}'.format(
+            variant
+        )
+
+        states = run_trajectory(
+            initial_condition=initial_condition,
+            cells=args.cells,
+            length=1.0,
+            final_time=0.2,
+            cfl=args.cfl,
+            snapshot_count=args.snapshots,
+        )
+
+        for state in states:
+            yield 'shock', group_id, state
+
+    # ------------------------------------------------------------------
+    # Shu--Osher-like shock/oscillation interactions
+    # ------------------------------------------------------------------
+
+    for variant in range(args.shu_variants):
+        if args.shu_variants == 1:
+            fraction = 0.5
+        else:
+            fraction = (
+                variant
+                / float(args.shu_variants - 1)
+            )
+
+        shock_position = 0.8 + 0.4 * fraction
+        amplitude = 0.15 + 0.10 * fraction
+        wave_number = 4.5 + 1.0 * fraction
+        phase = 0.35 * variant
+
+        initial_condition = make_shu_osher_initial_condition(
+            shock_position=shock_position,
+            amplitude=amplitude,
+            wave_number=wave_number,
+            phase=phase,
+        )
+
+        group_id = 'shu_{:03d}'.format(
+            variant
+        )
+
+        states = run_trajectory(
+            initial_condition=initial_condition,
+            cells=args.cells,
+            length=10.0,
+            final_time=1.8,
+            cfl=args.cfl,
+            snapshot_count=args.snapshots,
+        )
+
+        for state in states:
+            yield 'shock_oscillation', group_id, state
+
+    # ------------------------------------------------------------------
+    # Constant states
+    # ------------------------------------------------------------------
+
+    for variant in range(12):
+        density = rng.uniform(0.5, 3.0)
         velocity = rng.uniform(-1.0, 2.5)
         pressure = rng.uniform(0.2, 12.0)
-        energy = pressure/0.4 + 0.5*rho*velocity**2
-        cases.append(('constant', np.tile(
-            [rho, rho*velocity, energy], (args.cells, 1)
-        )))
-    return cases
+
+        constant_state = conservative_state(
+            np.full(args.cells, density),
+            np.full(args.cells, velocity),
+            np.full(args.cells, pressure),
+        )
+
+        group_id = 'constant_{:03d}'.format(
+            variant
+        )
+
+        yield 'constant', group_id, constant_state
+
+
+# ---------------------------------------------------------------------------
+# WENO-Z5 teacher
+# ---------------------------------------------------------------------------
+
+def weno_z5_reconstruction(values):
+    """Return WENO-Z5 interface values from five-point stencils.
+
+    Parameters
+    ----------
+    values:
+        Array whose final axis has length five.
+
+    Notes
+    -----
+    The stencil is normalized using its own minimum and range before
+    calculating the nonlinear weights. The reconstructed target is then
+    returned to its original physical scale.
+
+    This is consistent with the min/max preprocessing used during WENO-NN
+    training and inference.
+    """
+
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    if values.shape[-1] != 5:
+        raise ValueError(
+            'WENO-Z5 requires five-point stencils.'
+        )
+
+    minimum = np.min(
+        values,
+        axis=-1,
+        keepdims=True,
+    )
+
+    maximum = np.max(
+        values,
+        axis=-1,
+        keepdims=True,
+    )
+
+    value_range = maximum - minimum
+
+    nonconstant = (
+        value_range[..., 0] > 1.0e-14
+    )
+
+    normalized = np.zeros_like(
+        values,
+        dtype=float,
+    )
+
+    np.divide(
+        values - minimum,
+        value_range,
+        out=normalized,
+        where=value_range > 1.0e-14,
+    )
+
+    value0 = normalized[..., 0]
+    value1 = normalized[..., 1]
+    value2 = normalized[..., 2]
+    value3 = normalized[..., 3]
+    value4 = normalized[..., 4]
+
+    candidate0 = (
+        (1.0 / 3.0) * value0
+        - (7.0 / 6.0) * value1
+        + (11.0 / 6.0) * value2
+    )
+
+    candidate1 = (
+        -(1.0 / 6.0) * value1
+        + (5.0 / 6.0) * value2
+        + (1.0 / 3.0) * value3
+    )
+
+    candidate2 = (
+        (1.0 / 3.0) * value2
+        + (5.0 / 6.0) * value3
+        - (1.0 / 6.0) * value4
+    )
+
+    beta0 = (
+        (13.0 / 12.0)
+        * (value0 - 2.0 * value1 + value2)**2
+        + 0.25
+        * (value0 - 4.0 * value1 + 3.0 * value2)**2
+    )
+
+    beta1 = (
+        (13.0 / 12.0)
+        * (value1 - 2.0 * value2 + value3)**2
+        + 0.25
+        * (value1 - value3)**2
+    )
+
+    beta2 = (
+        (13.0 / 12.0)
+        * (value2 - 2.0 * value3 + value4)**2
+        + 0.25
+        * (3.0 * value2 - 4.0 * value3 + value4)**2
+    )
+
+    # WENO-Z global smoothness indicator.
+    tau5 = np.abs(
+        beta0 - beta2
+    )
+
+    epsilon = 1.0e-6
+    power = 2.0
+
+    alpha0 = (
+        0.1
+        * (
+            1.0
+            + (
+                tau5
+                / (beta0 + epsilon)
+            )**power
+        )
+    )
+
+    alpha1 = (
+        0.6
+        * (
+            1.0
+            + (
+                tau5
+                / (beta1 + epsilon)
+            )**power
+        )
+    )
+
+    alpha2 = (
+        0.3
+        * (
+            1.0
+            + (
+                tau5
+                / (beta2 + epsilon)
+            )**power
+        )
+    )
+
+    alpha_sum = (
+        alpha0
+        + alpha1
+        + alpha2
+    )
+
+    weight0 = alpha0 / alpha_sum
+    weight1 = alpha1 / alpha_sum
+    weight2 = alpha2 / alpha_sum
+
+    normalized_target = (
+        weight0 * candidate0
+        + weight1 * candidate1
+        + weight2 * candidate2
+    )
+
+    target = (
+        normalized_target
+        * value_range[..., 0]
+        + minimum[..., 0]
+    )
+
+    # A constant stencil must reconstruct exactly its constant value.
+    target = np.where(
+        nonconstant,
+        target,
+        values[..., 2],
+    )
+
+    return target
+
+
+# ---------------------------------------------------------------------------
+# Characteristic split-stencil extraction
+# ---------------------------------------------------------------------------
+
+def gather_five_point_stencils(
+    values,
+    offset,
+    reverse=False,
+):
+    """Match FiniteVolumeMethodEuler.partU for a five-point stencil."""
+
+    cell_count = len(values)
+
+    indices = np.clip(
+        np.arange(cell_count)[:, None]
+        + offset
+        + np.arange(-2, 3)[None, :],
+        0,
+        cell_count - 1,
+    )
+
+    gathered = np.transpose(
+        values[indices],
+        (0, 2, 1),
+    )
+
+    if reverse:
+        gathered = np.flip(
+            gathered,
+            axis=2,
+        )
+
+    return gathered
 
 
 def split_characteristic_stencils(state):
-    """Return five-point split stencils and WENO7 targets per scalar field."""
-    cells = len(state)
-    f = flux(state)
-    speeds = np.max(np.abs(spds(state)), axis=1)
-    right_state = np.concatenate((state[1:], state[-1:]), axis=0)
-    right_speed = np.concatenate((speeds[1:], speeds[-1:]))
-    alpha = np.maximum(speeds, right_speed)
-    left, right = roe_eigenbasis(state)
+    """Return matching five-point inputs and WENO-Z5 targets.
 
-    def stencil(values, offset, reverse=False):
-        indices = np.clip(
-            np.arange(cells)[:, None] + offset
-            + np.arange(-3, 4)[None, :], 0, cells-1
+    Positive and negative Lax--Friedrichs split characteristic fluxes are
+    treated as independent scalar samples, exactly as they are reconstructed
+    by the Euler solver.
+    """
+
+    state = np.asarray(
+        state,
+        dtype=float,
+    )
+
+    if state.ndim != 2 or state.shape[1] != 3:
+        raise ValueError(
+            'Euler state must have shape (cells, 3).'
         )
-        result = np.transpose(values[indices], (0, 2, 1))
-        return np.flip(result, axis=2) if reverse else result
 
-    up = project_to_characteristic(stencil(state, 0), left)
-    fp = project_to_characteristic(stencil(f, 0), left)
-    um = project_to_characteristic(stencil(state, 1, True), left)
-    fm = project_to_characteristic(stencil(f, 1, True), left)
-    pos = 0.5*(fp + alpha[:, None, None]*up)
-    neg = 0.5*(fm - alpha[:, None, None]*um)
+    if not np.isfinite(state).all():
+        raise ValueError(
+            'Euler state contains NaN or infinity.'
+        )
 
-    weno7 = __import__('src.schemes', fromlist=['WENO7euler']).WENO7euler()
-    inputs = np.concatenate((pos[:, :, 1:6], neg[:, :, 1:6]), axis=0)
-    targets = np.concatenate((weno7.evalF(pos), weno7.evalF(neg)), axis=0)
-    # Flatten characteristic components into independent scalar training rows.
-    return inputs.transpose(0, 1, 2).reshape(-1, 5), targets.reshape(-1)
+    cell_count = len(state)
+
+    physical_flux = flux(state)
+
+    speeds = np.max(
+        np.abs(spds(state)),
+        axis=1,
+    )
+
+    right_speed = np.concatenate((
+        speeds[1:],
+        speeds[-1:],
+    ))
+
+    alpha = np.maximum(
+        speeds,
+        right_speed,
+    )
+
+    left_basis, _ = roe_eigenbasis(
+        state,
+        boundary='transmissive',
+    )
+
+    positive_state_stencil = gather_five_point_stencils(
+        state,
+        offset=0,
+        reverse=False,
+    )
+
+    positive_flux_stencil = gather_five_point_stencils(
+        physical_flux,
+        offset=0,
+        reverse=False,
+    )
+
+    negative_state_stencil = gather_five_point_stencils(
+        state,
+        offset=1,
+        reverse=True,
+    )
+
+    negative_flux_stencil = gather_five_point_stencils(
+        physical_flux,
+        offset=1,
+        reverse=True,
+    )
+
+    positive_characteristic_state = project_to_characteristic(
+        positive_state_stencil,
+        left_basis,
+    )
+
+    positive_characteristic_flux = project_to_characteristic(
+        positive_flux_stencil,
+        left_basis,
+    )
+
+    negative_characteristic_state = project_to_characteristic(
+        negative_state_stencil,
+        left_basis,
+    )
+
+    negative_characteristic_flux = project_to_characteristic(
+        negative_flux_stencil,
+        left_basis,
+    )
+
+    alpha = alpha[:, None, None]
+
+    positive_split_flux = 0.5 * (
+        positive_characteristic_flux
+        + alpha * positive_characteristic_state
+    )
+
+    negative_split_flux = 0.5 * (
+        negative_characteristic_flux
+        - alpha * negative_characteristic_state
+    )
+
+    # Exclude interfaces where the five-point positive or negative stencil
+    # was clipped by the transmissive boundary.
+    #
+    # Positive stencil: i-2 ... i+2
+    # Negative stencil before reversal: i-1 ... i+3
+    #
+    # Both are unclipped for 2 <= i <= cell_count-4.
+    interface_indices = np.arange(
+        cell_count
+    )
+
+    interior = (
+        (interface_indices >= 2)
+        & (interface_indices <= cell_count - 4)
+    )
+
+    positive_split_flux = positive_split_flux[
+        interior
+    ]
+
+    negative_split_flux = negative_split_flux[
+        interior
+    ]
+
+    inputs = np.concatenate((
+        positive_split_flux,
+        negative_split_flux,
+    ), axis=0)
+
+    targets = weno_z5_reconstruction(
+        inputs
+    )
+
+    # Each characteristic component becomes an independent scalar sample.
+    inputs = inputs.reshape(
+        -1,
+        5,
+    )
+
+    targets = targets.reshape(
+        -1,
+    )
+
+    finite = (
+        np.isfinite(inputs).all(axis=1)
+        & np.isfinite(targets)
+    )
+
+    return (
+        inputs[finite],
+        targets[finite],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dataset balancing and sampling
+# ---------------------------------------------------------------------------
+
+def concatenate_category(category_items):
+    """Concatenate all arrays collected for one physical category."""
+
+    inputs = np.concatenate([
+        item[0]
+        for item in category_items
+    ], axis=0)
+
+    targets = np.concatenate([
+        item[1]
+        for item in category_items
+    ], axis=0)
+
+    groups = np.concatenate([
+        item[2]
+        for item in category_items
+    ], axis=0)
+
+    return inputs, targets, groups
+
+
+def requested_category_counts(sample_count):
+    """Return integer category quotas that sum exactly to sample_count."""
+
+    smooth_count = int(
+        sample_count
+        * CATEGORY_PROPORTIONS['smooth']
+    )
+
+    shock_count = int(
+        sample_count
+        * CATEGORY_PROPORTIONS['shock']
+    )
+
+    oscillation_count = int(
+        sample_count
+        * CATEGORY_PROPORTIONS['shock_oscillation']
+    )
+
+    constant_count = (
+        sample_count
+        - smooth_count
+        - shock_count
+        - oscillation_count
+    )
+
+    return {
+        'smooth': smooth_count,
+        'shock': shock_count,
+        'shock_oscillation': oscillation_count,
+        'constant': constant_count,
+    }
+
+
+def sample_balanced_dataset(
+    category_data,
+    sample_count,
+    rng,
+):
+    """Sample the requested category mixture without replacement."""
+
+    requested = requested_category_counts(
+        sample_count
+    )
+
+    selected_inputs = []
+    selected_targets = []
+    selected_groups = []
+    selected_categories = []
+
+    remaining_inputs = []
+    remaining_targets = []
+    remaining_groups = []
+    remaining_categories = []
+
+    for category in CATEGORY_PROPORTIONS:
+        inputs, targets, groups = category_data[
+            category
+        ]
+
+        permutation = rng.permutation(
+            len(inputs)
+        )
+
+        take_count = min(
+            requested[category],
+            len(inputs),
+        )
+
+        selected = permutation[:take_count]
+        unused = permutation[take_count:]
+
+        selected_inputs.append(
+            inputs[selected]
+        )
+
+        selected_targets.append(
+            targets[selected]
+        )
+
+        selected_groups.append(
+            groups[selected]
+        )
+
+        selected_categories.append(
+            np.full(
+                take_count,
+                category,
+                dtype=object,
+            )
+        )
+
+        if len(unused):
+            remaining_inputs.append(
+                inputs[unused]
+            )
+
+            remaining_targets.append(
+                targets[unused]
+            )
+
+            remaining_groups.append(
+                groups[unused]
+            )
+
+            remaining_categories.append(
+                np.full(
+                    len(unused),
+                    category,
+                    dtype=object,
+                )
+            )
+
+    current_count = sum(
+        len(values)
+        for values in selected_inputs
+    )
+
+    missing_count = (
+        sample_count
+        - current_count
+    )
+
+    if missing_count > 0:
+        if not remaining_inputs:
+            raise ValueError(
+                'No unused samples remain to satisfy the requested count.'
+            )
+
+        extra_inputs = np.concatenate(
+            remaining_inputs,
+            axis=0,
+        )
+
+        extra_targets = np.concatenate(
+            remaining_targets,
+            axis=0,
+        )
+
+        extra_groups = np.concatenate(
+            remaining_groups,
+            axis=0,
+        )
+
+        extra_categories = np.concatenate(
+            remaining_categories,
+            axis=0,
+        )
+
+        if len(extra_inputs) < missing_count:
+            raise ValueError(
+                'Requested {} samples, but only {} unique samples are '
+                'available. Reduce --samples or generate more trajectories.'
+                .format(
+                    sample_count,
+                    current_count + len(extra_inputs),
+                )
+            )
+
+        extra_selection = rng.choice(
+            len(extra_inputs),
+            size=missing_count,
+            replace=False,
+        )
+
+        selected_inputs.append(
+            extra_inputs[extra_selection]
+        )
+
+        selected_targets.append(
+            extra_targets[extra_selection]
+        )
+
+        selected_groups.append(
+            extra_groups[extra_selection]
+        )
+
+        selected_categories.append(
+            extra_categories[extra_selection]
+        )
+
+    inputs = np.concatenate(
+        selected_inputs,
+        axis=0,
+    )
+
+    targets = np.concatenate(
+        selected_targets,
+        axis=0,
+    )
+
+    groups = np.concatenate(
+        selected_groups,
+        axis=0,
+    )
+
+    categories = np.concatenate(
+        selected_categories,
+        axis=0,
+    )
+
+    return inputs, targets, groups, categories
+
+
+# ---------------------------------------------------------------------------
+# File output
+# ---------------------------------------------------------------------------
+
+def ensure_parent_directory(path):
+    parent = os.path.dirname(path)
+
+    if parent:
+        os.makedirs(
+            parent,
+            exist_ok=True,
+        )
 
 
 def main():
     args = parse_args()
-    if args.samples < 1:
-        raise ValueError('--samples must be positive.')
-    rng = np.random.RandomState(args.seed)
-    candidates = {name: [] for name in (
-        'smooth', 'shock', 'shock_oscillation', 'constant'
-    )}
-    for name, state in trajectories(args, rng):
-        inputs, targets = split_characteristic_stencils(state)
-        candidates[name].append((inputs, targets))
+    validate_args(args)
 
-    # The requested mixture is sampled without allowing one trajectory to
-    # dominate the dataset.
-    proportions = {
-        'smooth': 0.40, 'shock': 0.30,
-        'shock_oscillation': 0.20, 'constant': 0.10,
+    rng = np.random.RandomState(
+        args.seed
+    )
+
+    collected = {
+        category: []
+        for category in CATEGORY_PROPORTIONS
     }
-    all_inputs, all_targets, all_groups = [], [], []
-    for group, fraction in proportions.items():
-        inputs = np.concatenate([item[0] for item in candidates[group]], axis=0)
-        targets = np.concatenate([item[1] for item in candidates[group]], axis=0)
-        count = min(len(inputs), max(1, int(args.samples*fraction)))
-        # Select the desired group size, preserving stochastic variety.
-        selected = rng.choice(len(inputs), size=count, replace=False)
-        all_inputs.append(inputs[selected])
-        all_targets.append(targets[selected])
-        all_groups.extend([group]*len(selected))
 
-    inputs = np.concatenate(all_inputs, axis=0)
-    targets = np.concatenate(all_targets, axis=0)
-    groups = np.asarray(all_groups)
-    order = rng.permutation(len(inputs))
-    inputs, targets, groups = inputs[order], targets[order], groups[order]
-    for path in (args.output_inputs, args.output_targets, args.output_groups):
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-    np.savetxt(args.output_inputs, inputs.T, delimiter=',')
-    np.savetxt(args.output_targets, targets[:, None], delimiter=',')
-    np.savetxt(args.output_groups, groups[:, None], delimiter=',', fmt='%s')
-    print('Wrote {} samples to {}'.format(len(inputs), args.output_inputs))
-    print('Targets: {}'.format(args.output_targets))
-    print('Groups: {}'.format(args.output_groups))
+    print(
+        'Generating Euler trajectories...',
+        flush=True,
+    )
+
+    trajectory_ids = set()
+    state_count = 0
+
+    for category, group_id, state in generated_states(
+        args,
+        rng,
+    ):
+        inputs, targets = split_characteristic_stencils(
+            state
+        )
+
+        groups = np.full(
+            len(inputs),
+            group_id,
+            dtype=object,
+        )
+
+        collected[category].append((
+            inputs,
+            targets,
+            groups,
+        ))
+
+        trajectory_ids.add(
+            group_id
+        )
+
+        state_count += 1
+
+    category_data = {}
+
+    print(
+        'Available samples before balancing:',
+        flush=True,
+    )
+
+    for category in CATEGORY_PROPORTIONS:
+        if not collected[category]:
+            raise ValueError(
+                'No samples were generated for category {}.'
+                .format(category)
+            )
+
+        category_data[category] = concatenate_category(
+            collected[category]
+        )
+
+        print(
+            '  {:20s}: {}'.format(
+                category,
+                len(category_data[category][0]),
+            ),
+            flush=True,
+        )
+
+    (
+        inputs,
+        targets,
+        groups,
+        categories,
+    ) = sample_balanced_dataset(
+        category_data,
+        args.samples,
+        rng,
+    )
+
+    order = rng.permutation(
+        len(inputs)
+    )
+
+    inputs = inputs[order]
+    targets = targets[order]
+    groups = groups[order]
+    categories = categories[order]
+
+    if not np.isfinite(inputs).all():
+        raise ValueError(
+            'Final input dataset contains NaN or infinity.'
+        )
+
+    if not np.isfinite(targets).all():
+        raise ValueError(
+            'Final target dataset contains NaN or infinity.'
+        )
+
+    for path in (
+        args.output_inputs,
+        args.output_targets,
+        args.output_groups,
+    ):
+        ensure_parent_directory(path)
+
+    # Preserve compatibility with Script_TrainOnEulerPrblms.py:
+    # five rows and one column per sample.
+    np.savetxt(
+        args.output_inputs,
+        inputs.T,
+        delimiter=',',
+    )
+
+    np.savetxt(
+        args.output_targets,
+        targets[:, None],
+        delimiter=',',
+    )
+
+    np.savetxt(
+        args.output_groups,
+        groups[:, None],
+        delimiter=',',
+        fmt='%s',
+    )
+
+    print(
+        '\nGenerated dataset successfully.',
+        flush=True,
+    )
+
+    print(
+        '  States processed      : {}'.format(
+            state_count
+        )
+    )
+
+    print(
+        '  Unique trajectory IDs : {}'.format(
+            len(np.unique(groups))
+        )
+    )
+
+    print(
+        '  Total samples         : {}'.format(
+            len(inputs)
+        )
+    )
+
+    print(
+        '  Input shape           : {}'.format(
+            inputs.T.shape
+        )
+    )
+
+    print(
+        '  Target shape          : {}'.format(
+            targets[:, None].shape
+        )
+    )
+
+    print(
+        '  Input file            : {}'.format(
+            args.output_inputs
+        )
+    )
+
+    print(
+        '  Target file           : {}'.format(
+            args.output_targets
+        )
+    )
+
+    print(
+        '  Group file            : {}'.format(
+            args.output_groups
+        )
+    )
+
+    print(
+        '\nFinal category counts:',
+        flush=True,
+    )
+
+    for category in CATEGORY_PROPORTIONS:
+        print(
+            '  {:20s}: {}'.format(
+                category,
+                int(np.sum(categories == category)),
+            )
+        )
 
 
 if __name__ == '__main__':
